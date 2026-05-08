@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "alex-data-layer"
+version = "0.1.0"
+description = "PostgreSQL + pgvector schema and Alembic migrations for Alex."
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+authors = [{ name = "PREDICT" }]
+dependencies = [
+    "alembic>=1.13,<2",
+    "sqlalchemy>=2.0,<3",
+    "psycopg[binary]>=3.2,<4",
+    "pgvector>=0.3,<0.4",
+    "python-dotenv>=1.0,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pytest-postgresql>=6,<7",
+    "ruff>=0.6,<0.7",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/alex_data_layer"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
