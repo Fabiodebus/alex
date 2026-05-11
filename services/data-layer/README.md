@@ -26,7 +26,12 @@ Install this package (editable) and run migrations:
 ```sh
 cd services/data-layer
 python -m venv .venv && source .venv/bin/activate
-pip install -e .[dev]
+pip install -e '.[dev]'
+
+# macOS only: pip on darwin marks the editable `.pth` file UF_HIDDEN,
+# which makes Python's site.py skip it on import. Clear the flag:
+[ "$(uname)" = "Darwin" ] && chflags nohidden .venv/lib/python3.12/site-packages/__editable__.alex_data_layer-*.pth 2>/dev/null
+
 alembic upgrade head
 ```
 
