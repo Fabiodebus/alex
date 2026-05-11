@@ -108,6 +108,17 @@ class Settings(BaseSettings):
     crm_write_provider: str = "stub"
     alex_pipedream_crm_write_url: str = ""
 
+    # WO #13 — Notification Delivery. ``stub`` records attempts
+    # in-memory; ``http`` POSTs to the Slack / Teams messaging surfaces.
+    messaging_delivery_provider: str = "stub"
+    alex_slack_deliver_url: str = ""
+    alex_teams_deliver_url: str = ""
+    # Window after which an un-acknowledged delivery is escalated to
+    # the next daily brief. The blueprint calls this "the configurable
+    # retry window"; 30 minutes is the v1 default.
+    delivery_escalation_seconds: int = 30 * 60
+    delivery_max_attempts: int = 3
+
     @property
     def has_real_embedding_client(self) -> bool:
         return bool(self.openai_api_key)

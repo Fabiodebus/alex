@@ -47,6 +47,9 @@ from .event_bus import EventBus
 log = structlog.get_logger(__name__)
 
 
+TOPIC_CRM_WRITE_FAILED = "crm.write_failed"
+
+
 class CRMWriterError(RuntimeError):
     """Raised when the writer cannot even produce a CRMWriteRequest (e.g.
     empty batch). Dispatch failures are returned as
@@ -138,7 +141,7 @@ class CRMWriter:
 
         if result.status is not CRMWriteStatus.SUCCEEDED and self._event_bus is not None:
             await self._event_bus.publish(
-                "crm.write_failed",
+                TOPIC_CRM_WRITE_FAILED,
                 CRMWriteFailed(
                     tenant_id=tenant_id,
                     rep_id=rep_id,

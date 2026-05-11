@@ -39,6 +39,17 @@ from .services.crm_reader import CRMReader
 from .services.crm_validator import CRMValidator
 from .services.crm_write_client import build_default_crm_write_client
 from .services.crm_writer import CRMWriter
+from .services.delivery_escalation_scan import (
+    DELIVERY_ESCALATION_SCAN_INTERVAL_SECONDS,
+    DeliveryEscalationScan,
+    build_escalation_scan_job,
+)
+from .services.delivery_preferences import DeliveryPreferenceRepo
+from .services.delivery_tracker import DeliveryTracker
+from .services.messaging_delivery_client import (
+    build_default_messaging_delivery_client,
+)
+from .services.output_router import OutputRouter, attach_router
 from .services.meeting_classifier import MeetingClassifier
 from .services.meeting_completion_scan import (
     MEETING_COMPLETION_SCAN_INTERVAL_SECONDS,
@@ -114,6 +125,21 @@ async def lifespan(app: FastAPI):
         crm_validator=crm_validator,
     )
     attach_dispatcher(bus=event_bus, dispatcher=approved_action_dispatcher)
+    delivery_preferences = DeliveryPreferenceRepo()
+    delivery_tracker = DeliveryTracker(
+        escalation_seconds=settings.delivery_escalation_seconds,
+    )
+    messaging_delivery_client = build_default_messaging_delivery_client(settings)
+    output_router = OutputRouter(
+        delivery_client=messaging_delivery_client,
+        preferences=delivery_preferences,
+        tracker=delivery_tracker,
+    )
+    attach_router(bus=event_bus, router=output_router)
+    delivery_escalation_scan = DeliveryEscalationScan(
+        tracker=delivery_tracker,
+        event_bus=event_bus,
+    )
     meeting_emitter = MeetingEventEmitter(event_bus)
     meeting_classifier = MeetingClassifier(
         memory_store=memory_store,
@@ -144,6 +170,11 @@ async def lifespan(app: FastAPI):
     app.state.approval_gate = approval_gate
     app.state.approval_expiry_scan = approval_expiry_scan
     app.state.approved_action_dispatcher = approved_action_dispatcher
+    app.state.delivery_preferences = delivery_preferences
+    app.state.delivery_tracker = delivery_tracker
+    app.state.messaging_delivery_client = messaging_delivery_client
+    app.state.output_router = output_router
+    app.state.delivery_escalation_scan = delivery_escalation_scan
     app.state.meeting_emitter = meeting_emitter
     app.state.meeting_classifier = meeting_classifier
     app.state.meeting_completion_scan = meeting_completion_scan
@@ -163,6 +194,11 @@ async def lifespan(app: FastAPI):
         seconds=APPROVAL_EXPIRY_SCAN_INTERVAL_SECONDS,
         job_id="approval_expiry_scan",
     )
+    scheduler.add_interval_job(
+        build_escalation_scan_job(delivery_escalation_scan),
+        seconds=DELIVERY_ESCALATION_SCAN_INTERVAL_SECONDS,
+        job_id="delivery_escalation_scan",
+    )
     scheduler.start()
 
     try:
@@ -175,6 +211,7 @@ async def lifespan(app: FastAPI):
             getattr(ingestion_provider, "close", None),
             getattr(crm_fetch_client, "close", None),
             getattr(crm_write_client, "close", None),
+            getattr(messaging_delivery_client, "close", None),
         ):
             if closer is not None:
                 await closer()

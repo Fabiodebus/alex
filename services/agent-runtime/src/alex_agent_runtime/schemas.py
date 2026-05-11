@@ -812,3 +812,107 @@ class TaskExpired(BaseModel):
     task_id: UUID
     task_type: str
     deadline: datetime
+
+
+# ---------------------------------------------------------------------------
+# WO #13 — Notification Delivery
+# ---------------------------------------------------------------------------
+class DeliveryChannel(StrEnum):
+    SLACK = "slack"
+    TEAMS = "teams"
+    CRM_NATIVE = "crm_native"
+
+
+class OutputType(StrEnum):
+    """Coarse categories used as the lookup key for DeliveryPreference.
+
+    Feature WOs may add more types; the OutputRouter falls back to
+    SLACK whenever a type has no explicit preference."""
+
+    APPROVAL_REQUEST = "approval_request"
+    NOTIFICATION = "notification"
+    DAILY_BRIEF = "daily_brief"
+    MEETING_PREP = "meeting_prep"
+    CRM_WRITE_FAILED = "crm_write_failed"
+
+
+class DeliveryStatusValue(StrEnum):
+    """Mirrors the DB check constraint on delivery_statuses.status."""
+
+    PENDING = "pending"
+    DELIVERED = "delivered"
+    FAILED = "failed"
+    ESCALATED = "escalated"
+
+
+class DeliveryRequest(BaseModel):
+    """Input to :meth:`OutputRouter.deliver`.
+
+    The router uses ``output_id`` as the per-tenant idempotency key —
+    re-delivering the same output_id flips the existing row rather
+    than creating a new one. Callers that re-send the same logical
+    output (e.g. on a retry) should keep the id stable.
+    """
+
+    tenant_id: UUID
+    rep_id: UUID
+    output_id: str = Field(min_length=1)
+    output_type: OutputType | str
+    task_id: UUID | None = None
+    title: str
+    body: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeliveryStatus(BaseModel):
+    """Read model returned by :class:`DeliveryTracker`."""
+
+    id: UUID
+    tenant_id: UUID
+    rep_id: UUID
+    task_id: UUID | None = None
+    output_id: str
+    output_type: str
+    channel: DeliveryChannel
+    status: DeliveryStatusValue
+    attempt_count: int
+    last_attempt_at: datetime | None = None
+    acknowledged_at: datetime | None = None
+    escalated_at: datetime | None = None
+    retry_after: datetime | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    response: dict[str, Any] | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DeliveryAttempt(BaseModel):
+    """Wire payload handed to a :class:`MessagingDeliveryClient`.
+
+    Concrete clients (Slack, Teams) translate this into their surface-
+    specific call. ``rep_id`` lets the surface side resolve the
+    messaging identity (e.g. Slack ``slack_user_id``)."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    output_id: str
+    output_type: str
+    task_id: UUID | None = None
+    title: str
+    body: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeliveryEscalated(BaseModel):
+    """Published when a delivery's retry window has elapsed.
+
+    Daily Brief (a future WO) subscribes and surfaces the unactioned
+    output to the rep on the next brief assembly."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    output_id: str
+    output_type: str
+    channel: DeliveryChannel
+    attempt_count: int
+    escalated_at: datetime
