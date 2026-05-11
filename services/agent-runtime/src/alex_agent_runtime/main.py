@@ -50,6 +50,10 @@ from .services.messaging_delivery_client import (
     build_default_messaging_delivery_client,
 )
 from .services.output_router import OutputRouter, attach_router
+from .services.voice_applicator import VoiceApplicator
+from .services.voice_profile_store import VoiceProfileStore
+from .services.voice_signal_extractor import VoiceSignalExtractor
+from .services.voice_updater import VoiceUpdater, attach_updater
 from .services.meeting_classifier import MeetingClassifier
 from .services.meeting_completion_scan import (
     MEETING_COMPLETION_SCAN_INTERVAL_SECONDS,
@@ -140,6 +144,14 @@ async def lifespan(app: FastAPI):
         tracker=delivery_tracker,
         event_bus=event_bus,
     )
+    voice_profile_store = VoiceProfileStore(memory_store=memory_store)
+    voice_updater = VoiceUpdater(
+        store=voice_profile_store,
+        extractor=VoiceSignalExtractor(),
+        settings=settings,
+    )
+    attach_updater(bus=event_bus, updater=voice_updater)
+    voice_applicator = VoiceApplicator(store=voice_profile_store)
     meeting_emitter = MeetingEventEmitter(event_bus)
     meeting_classifier = MeetingClassifier(
         memory_store=memory_store,
@@ -175,6 +187,9 @@ async def lifespan(app: FastAPI):
     app.state.messaging_delivery_client = messaging_delivery_client
     app.state.output_router = output_router
     app.state.delivery_escalation_scan = delivery_escalation_scan
+    app.state.voice_profile_store = voice_profile_store
+    app.state.voice_updater = voice_updater
+    app.state.voice_applicator = voice_applicator
     app.state.meeting_emitter = meeting_emitter
     app.state.meeting_classifier = meeting_classifier
     app.state.meeting_completion_scan = meeting_completion_scan

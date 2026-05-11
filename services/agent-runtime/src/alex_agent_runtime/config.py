@@ -119,6 +119,13 @@ class Settings(BaseSettings):
     delivery_escalation_seconds: int = 30 * 60
     delivery_max_attempts: int = 3
 
+    # WO #14 — Voice Model EWMA tuning. ``alpha = max(min_alpha,
+    # 1 / (1 + sample_count * decay))``. Defaults give a fresh profile
+    # alpha=1.0 (first edit defines it), then 0.5 / 0.33 / 0.25 / ...
+    # converging on min_alpha as the rep accumulates approved drafts.
+    voice_update_min_alpha: float = 0.05
+    voice_update_decay: float = 1.0
+
     @property
     def has_real_embedding_client(self) -> bool:
         return bool(self.openai_api_key)

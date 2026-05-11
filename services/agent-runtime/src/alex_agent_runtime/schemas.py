@@ -916,3 +916,119 @@ class DeliveryEscalated(BaseModel):
     channel: DeliveryChannel
     attempt_count: int
     escalated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# WO #14 — Voice Model
+# ---------------------------------------------------------------------------
+class VoiceLanguage(StrEnum):
+    """Languages tracked separately in the voice profile.
+
+    Only English and German are supported in v1 per the blueprint.
+    Other locales fall back to English."""
+
+    EN = "en"
+    DE = "de"
+
+
+class GermanRegister(StrEnum):
+    """German Sie/Du register selection. ``MIXED`` is the safe default
+    while the model accumulates signal; the applicator escalates to a
+    concrete value once observed often enough."""
+
+    SIE = "sie"
+    DU = "du"
+    MIXED = "mixed"
+
+
+class VoicePatternStat(BaseModel):
+    """One weighted phrase pattern (greeting, sign-off, signature)."""
+
+    phrase: str = Field(min_length=1)
+    weight: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class VoiceLanguageProfile(BaseModel):
+    """Per-language sub-profile inside a :class:`VoiceProfile`."""
+
+    greetings: list[VoicePatternStat] = Field(default_factory=list)
+    signoffs: list[VoicePatternStat] = Field(default_factory=list)
+    signature_phrases: list[VoicePatternStat] = Field(default_factory=list)
+    forbidden_phrases: list[VoicePatternStat] = Field(default_factory=list)
+    # Tone dimensions in [0.0, 1.0] — 0.5 is the neutral default.
+    formality: float = Field(default=0.5, ge=0.0, le=1.0)
+    warmth: float = Field(default=0.5, ge=0.0, le=1.0)
+    directness: float = Field(default=0.5, ge=0.0, le=1.0)
+    brevity: float = Field(default=0.5, ge=0.0, le=1.0)
+    # German-only attribute; ignored in the EN sub-profile.
+    de_register: GermanRegister = GermanRegister.MIXED
+    sample_count: int = 0
+
+
+class VoiceProfile(BaseModel):
+    """Per-rep voice representation stored in REP-tier memory.
+
+    Version monotonically increases on every update. The most recent
+    row is the active profile; earlier versions are the revert history.
+    """
+
+    rep_id: UUID
+    version: int = 1
+    languages: dict[VoiceLanguage, VoiceLanguageProfile] = Field(
+        default_factory=lambda: {
+            VoiceLanguage.EN: VoiceLanguageProfile(),
+            VoiceLanguage.DE: VoiceLanguageProfile(),
+        }
+    )
+    updated_at: datetime | None = None
+    notes: str | None = None  # short human-readable rationale on revert
+
+
+class VoiceSignal(BaseModel):
+    """Output of :class:`VoiceSignalExtractor.extract`.
+
+    Carries per-language deltas the updater applies to the active
+    profile. Empty lists mean no signal for that field."""
+
+    language: VoiceLanguage = VoiceLanguage.EN
+    added_greetings: list[str] = Field(default_factory=list)
+    removed_greetings: list[str] = Field(default_factory=list)
+    added_signoffs: list[str] = Field(default_factory=list)
+    removed_signoffs: list[str] = Field(default_factory=list)
+    added_phrases: list[str] = Field(default_factory=list)
+    removed_phrases: list[str] = Field(default_factory=list)
+    # Length delta as a ratio of the original length, clamped to [-1, 1].
+    # Positive means the rep wrote a longer draft than Alex; negative
+    # means the rep trimmed.
+    length_delta_ratio: float = 0.0
+    de_register_signal: GermanRegister | None = None
+
+
+class VoiceApplication(BaseModel):
+    """Metadata tag attached to each generated draft.
+
+    Used to correlate drafts with the profile version that produced
+    them — important for the "revert when a version regresses" path
+    in the blueprint."""
+
+    rep_id: UUID
+    profile_version: int
+    language: VoiceLanguage
+    de_register: GermanRegister | None = None
+    account_external_id: str | None = None
+    applied_at: datetime
+
+
+class DiscardSignal(BaseModel):
+    """Published when a rep discards a draft.
+
+    The updater records the discarded text under
+    ``forbidden_phrases`` (negatively weighted) without ever resetting
+    the profile."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    task_id: UUID
+    language: VoiceLanguage = VoiceLanguage.EN
+    discarded_body: str
+    feedback: str | None = None
