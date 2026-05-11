@@ -256,3 +256,67 @@ class MemorySummary(BaseModel):
 class EmbeddingChunk(BaseModel):
     text: str
     chunk_index: int
+
+
+# ---------------------------------------------------------------------------
+# WO #8 — MemorySummarizer + IngestionPipeline
+# ---------------------------------------------------------------------------
+class MemorySummaryUpdated(BaseModel):
+    """Published by MemorySummarizer when a stored summary row is refreshed."""
+
+    tenant_id: UUID
+    tier: MemoryTier
+    owner_id: UUID | None = None
+    summary_memory_id: UUID
+    sources_summarized: int
+
+
+class IngestedRecordKind(StrEnum):
+    CRM_OPPORTUNITY = "crm_opportunity"
+    CRM_CONTACT = "crm_contact"
+    EMAIL_THREAD = "email_thread"
+    CALL_RECORDING = "call_recording"
+
+
+class IngestedRecord(BaseModel):
+    kind: IngestedRecordKind
+    external_id: str
+    content: str
+    occurred_at: datetime | None = None
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class IngestionBatch(BaseModel):
+    """What an IngestionProvider returns for a single rep's backfill."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    fetched_at: datetime
+    records: list[IngestedRecord] = Field(default_factory=list)
+
+
+class IngestionResult(BaseModel):
+    tenant_id: UUID
+    rep_id: UUID
+    records_processed: int
+    memories_written: int
+    memories_deduplicated: int
+    started_at: datetime
+    completed_at: datetime
+    errors: list[str] = Field(default_factory=list)
+
+
+class IngestionComplete(BaseModel):
+    """Published by IngestionPipeline once a backfill finishes."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    result: IngestionResult
+
+
+class IngestionStartRequest(BaseModel):
+    """Body for POST /ingestion/start."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    since_days: int = Field(default=90, ge=1, le=365)

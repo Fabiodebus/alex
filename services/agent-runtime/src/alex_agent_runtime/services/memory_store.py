@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -68,6 +69,20 @@ class MemoryStoreError(RuntimeError):
     pass
 
 
+@dataclass(slots=True, frozen=True)
+class WriteResult:
+    """Returned by :meth:`MemoryStore.write_with_status`.
+
+    ``inserted=True`` means a brand-new row was created; ``False``
+    means the unique-index conflict path fired and ``record`` is the
+    pre-existing row. Both cases still trigger embedding indexing
+    (idempotent by chunk_text).
+    """
+
+    record: "MemoryRecord"
+    inserted: bool
+
+
 def _content_hash(kind: str, content: str) -> str:
     """Hash includes ``kind`` so the same physical text used for different
     purposes (e.g. as ``voice_sample`` vs ``interaction_note``) stays as
@@ -122,15 +137,32 @@ class MemoryStore:
         write: MemoryWrite,
         index_embeddings: bool = True,
     ) -> MemoryRecord:
-        """Insert (or recover-the-existing) memory row and optionally
-        embed its content.
+        """Insert-or-dedup a memory row; return just the record.
 
-        The dedup key is ``(tenant_id, owner_id, sha256(kind + content))``
-        — enforced both in the application (this method) and by the
-        unique partial index added in migration ``0005``. We ``INSERT ...
-        ON CONFLICT DO NOTHING`` and re-fetch the conflicting row on
-        miss; that closes the race the previous SELECT-then-INSERT
-        version had at READ COMMITTED.
+        For callers that need to know whether the row was freshly
+        inserted vs hit dedup (e.g. the IngestionPipeline reporting),
+        use :meth:`write_with_status` instead.
+        """
+        result = await self.write_with_status(
+            tenant_id=tenant_id, write=write, index_embeddings=index_embeddings
+        )
+        return result.record
+
+    async def write_with_status(
+        self,
+        *,
+        tenant_id: UUID,
+        write: MemoryWrite,
+        index_embeddings: bool = True,
+    ) -> WriteResult:
+        """As :meth:`write`, but returns a :class:`WriteResult` exposing
+        whether the row was newly inserted (``inserted=True``) or the
+        unique-index conflict path returned a pre-existing row.
+
+        Dedup key: ``(tenant_id, owner_id, sha256(kind + content))`` —
+        enforced both in the application and by the partial unique
+        indexes from migration ``0005``. The ``INSERT ... ON CONFLICT DO
+        NOTHING`` makes concurrent writers race-free.
         """
         meta = _TIER_TABLES[write.tier]
         memory_table = meta["memory_table"]
@@ -164,7 +196,6 @@ class MemoryStore:
                 )
                 inserted = row.one_or_none()
                 if inserted is None:
-                    # Conflict → the row already exists; fetch it.
                     existing = await self._find_by_content_hash(
                         session,
                         memory_table=memory_table,
@@ -173,10 +204,6 @@ class MemoryStore:
                         content_hash=attributes["content_hash"],
                     )
                     if existing is None:
-                        # The conflict target matched but the row is
-                        # invisible (soft-deleted with the same hash and
-                        # the partial index didn't see it, or RLS hid
-                        # it). Surface this rather than returning None.
                         raise MemoryStoreError(
                             f"INSERT conflict on {memory_table} but no matching row found"
                         )
@@ -194,7 +221,7 @@ class MemoryStore:
                             chunk_chars=self._settings.embedding_chunk_chars,
                             overlap=self._settings.embedding_chunk_overlap,
                         )
-                    return existing
+                    return WriteResult(record=existing, inserted=False)
 
                 record = self._row_to_record(write.tier, inserted, owner_column=owner_column)
 
@@ -214,7 +241,7 @@ class MemoryStore:
             memory_id=str(record.id),
             owner_id=str(write.owner_id) if write.owner_id else None,
         )
-        return record
+        return WriteResult(record=record, inserted=True)
 
     # ------------------------------------------------------------------
     # Reads

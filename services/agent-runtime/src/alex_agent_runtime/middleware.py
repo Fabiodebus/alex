@@ -26,8 +26,14 @@ _TENANT_FREE_PATHS: frozenset[str] = frozenset({"/healthz", "/readyz", "/metrics
 # Routes that require a signed body when the secret is configured. Health
 # probes and OpenAPI docs are excluded so they can be hit unauthenticated.
 # /connections is signed because the Pipedream OAuth relay calls it with
-# vaulted-credential metadata.
-_SIGNED_PATH_PREFIXES: tuple[str, ...] = ("/events", "/callbacks", "/connections")
+# vaulted-credential metadata; /ingestion is signed because the onboarding
+# flow uses the same internal HMAC contract.
+_SIGNED_PATH_PREFIXES: tuple[str, ...] = (
+    "/events",
+    "/callbacks",
+    "/connections",
+    "/ingestion",
+)
 
 
 class WebhookSignatureMiddleware(BaseHTTPMiddleware):

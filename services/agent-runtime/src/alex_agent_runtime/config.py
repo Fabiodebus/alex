@@ -72,6 +72,28 @@ class Settings(BaseSettings):
     # this value is the fallback when the row is missing.
     default_share_rep_memories_across_org: bool = False
 
+    # ------------------------------------------------------------------
+    # WO #8 — MemorySummarizer + IngestionPipeline
+    # ------------------------------------------------------------------
+    # Source rows can be older than the latest summary by this many
+    # seconds before we consider the summary stale enough to rebuild.
+    summary_staleness_seconds: int = 60 * 60 * 6  # 6h
+    # Cap on how many recent source rows feed a single summary (keeps
+    # the prompt bounded).
+    summary_source_limit: int = 20
+    # Cron expression for the periodic full-rebuild pass run by the
+    # SchedulerService. Empty string disables the periodic job; on-demand
+    # calls always work.
+    summary_cron: str = "*/30 * * * *"
+
+    # Which IngestionProvider implementation to wire on lifespan. "stub"
+    # returns deterministic synthetic data for tests; "pipedream" POSTs
+    # (signed) to the configured workflow URL.
+    ingestion_provider: str = "stub"
+    alex_pipedream_ingestion_url: str = ""
+    ingestion_default_since_days: int = 90
+    ingestion_recording_cap: int = 5
+
     @property
     def has_real_embedding_client(self) -> bool:
         return bool(self.openai_api_key)

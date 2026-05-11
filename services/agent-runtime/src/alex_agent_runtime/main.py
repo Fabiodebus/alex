@@ -21,10 +21,17 @@ from .routes.callbacks import router as callbacks_router
 from .routes.connections import router as connections_router
 from .routes.events import router as events_router
 from .routes.health import router as health_router
+from .routes.ingestion import router as ingestion_router
 from .services.agent_backend import build_default_backend
 from .services.approval_handler import ApprovalHandler
+from .services.embedding_client import build_default_embedding_client
+from .services.event_bus import EventBus
 from .services.event_processor import EventProcessor
 from .services.feature_router import FeatureRouter
+from .services.ingestion_pipeline import IngestionPipeline
+from .services.ingestion_provider import build_default_ingestion_provider
+from .services.memory_store import MemoryStore
+from .services.memory_summarizer import MemorySummarizer
 from .services.scheduler import SchedulerService
 
 
@@ -56,12 +63,34 @@ async def lifespan(app: FastAPI):
     event_processor = EventProcessor(feature_router)
     approval_handler = ApprovalHandler()
     scheduler = SchedulerService()
+    event_bus = EventBus()
+    embedding_client = build_default_embedding_client(settings)
+    memory_store = MemoryStore(embedding_client=embedding_client, settings=settings)
+    memory_summarizer = MemorySummarizer(
+        memory_store=memory_store,
+        agent_backend=agent_backend,
+        event_bus=event_bus,
+        settings=settings,
+    )
+    ingestion_provider = build_default_ingestion_provider(settings)
+    ingestion_pipeline = IngestionPipeline(
+        provider=ingestion_provider,
+        memory_store=memory_store,
+        event_bus=event_bus,
+        settings=settings,
+    )
 
     app.state.feature_router = feature_router
     app.state.agent_backend = agent_backend
     app.state.event_processor = event_processor
     app.state.approval_handler = approval_handler
     app.state.scheduler = scheduler
+    app.state.event_bus = event_bus
+    app.state.embedding_client = embedding_client
+    app.state.memory_store = memory_store
+    app.state.memory_summarizer = memory_summarizer
+    app.state.ingestion_provider = ingestion_provider
+    app.state.ingestion_pipeline = ingestion_pipeline
 
     scheduler.add_interval_job(
         heartbeat,
@@ -75,6 +104,10 @@ async def lifespan(app: FastAPI):
     finally:
         log.info("runtime.stopping")
         await scheduler.shutdown()
+        # Close the ingestion provider if it owns network resources.
+        close = getattr(ingestion_provider, "close", None)
+        if close is not None:
+            await close()
         await dispose_engine()
 
 
@@ -90,6 +123,7 @@ def create_app() -> FastAPI:
     app.include_router(events_router)
     app.include_router(callbacks_router)
     app.include_router(connections_router)
+    app.include_router(ingestion_router)
     return app
 
 
