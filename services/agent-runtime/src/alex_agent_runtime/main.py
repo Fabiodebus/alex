@@ -51,6 +51,11 @@ from .services.messaging_delivery_client import (
     build_default_messaging_delivery_client,
 )
 from .services.output_router import OutputRouter, attach_router
+from .services.activation_tracker import (
+    ActivationTracker,
+    attach_activation_tracker,
+    build_activation_scan_job,
+)
 from .services.oauth_orchestrator import OAuthOrchestrator
 from .services.oauth_provider import build_default_oauth_provider
 from .services.onboarding_conversation import OnboardingConversationFlow
@@ -167,6 +172,14 @@ async def lifespan(app: FastAPI):
         state_repo=onboarding_state_repo,
         output_router=output_router,
     )
+    activation_tracker = ActivationTracker(
+        memory_store=memory_store,
+        state_repo=onboarding_state_repo,
+        output_router=output_router,
+        event_bus=event_bus,
+        settings=settings,
+    )
+    attach_activation_tracker(bus=event_bus, tracker=activation_tracker)
     meeting_emitter = MeetingEventEmitter(event_bus)
     meeting_classifier = MeetingClassifier(
         memory_store=memory_store,
@@ -209,6 +222,7 @@ async def lifespan(app: FastAPI):
     app.state.oauth_provider = oauth_provider
     app.state.oauth_orchestrator = oauth_orchestrator
     app.state.onboarding_flow = onboarding_flow
+    app.state.activation_tracker = activation_tracker
     app.state.meeting_emitter = meeting_emitter
     app.state.meeting_classifier = meeting_classifier
     app.state.meeting_completion_scan = meeting_completion_scan
@@ -232,6 +246,11 @@ async def lifespan(app: FastAPI):
         build_escalation_scan_job(delivery_escalation_scan),
         seconds=DELIVERY_ESCALATION_SCAN_INTERVAL_SECONDS,
         job_id="delivery_escalation_scan",
+    )
+    scheduler.add_interval_job(
+        build_activation_scan_job(activation_tracker),
+        seconds=settings.activation_scan_interval_seconds,
+        job_id="activation_fallback_scan",
     )
     scheduler.start()
 

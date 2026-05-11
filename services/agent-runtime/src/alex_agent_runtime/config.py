@@ -138,6 +138,9 @@ class Settings(BaseSettings):
     # short-circuit "authorize" URL it points the Slack bot at. Leave
     # empty in tests; the orchestrator falls back to the relative URL.
     alex_agent_runtime_public_url: str = ""
+    # WO #16 — ActivationTracker timing.
+    activation_proactive_window_hours: int = 24
+    activation_scan_interval_seconds: int = 30 * 60  # 30 min
 
     @property
     def has_real_embedding_client(self) -> bool:
