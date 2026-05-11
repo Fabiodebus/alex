@@ -18,7 +18,7 @@ class CallbackAction(StrEnum):
 class AgentOutput(BaseModel):
     """Payload received on POST /deliver from the Agent Runtime."""
 
-    task_id: UUID
+    task_id: UUID | None = None
     tenant_id: UUID
     rep_id: UUID
     slack_user_id: str = Field(description="External Slack user id resolved by the runtime.")
@@ -31,7 +31,8 @@ class AgentOutput(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     actions: list[str] = Field(
         default_factory=lambda: ["approve", "edit", "discard"],
-        description="Which interactive buttons to show.",
+        description="Default approve/edit/discard buttons. Custom button "
+        "specs (e.g. onboarding) are passed via metadata.actions.",
     )
 
 

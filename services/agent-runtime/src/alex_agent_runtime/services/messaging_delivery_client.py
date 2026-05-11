@@ -23,6 +23,7 @@ import structlog
 
 from ..config import Settings, get_settings
 from ..schemas import DeliveryAttempt, DeliveryChannel
+from .messaging_identity_repo import MessagingIdentityRepo
 from .pipedream_client import _sign
 
 log = structlog.get_logger(__name__)
@@ -91,10 +92,12 @@ class HttpMessagingDeliveryClient:
         settings: Settings,
         *,
         client: httpx.AsyncClient | None = None,
+        identity_repo: MessagingIdentityRepo | None = None,
     ) -> None:
         self._settings = settings
         self._http = client or httpx.AsyncClient(timeout=15.0)
         self._owned_http = client is None
+        self._identity_repo = identity_repo or MessagingIdentityRepo()
 
     async def close(self) -> None:
         if self._owned_http:
@@ -112,6 +115,16 @@ class HttpMessagingDeliveryClient:
                 f"No URL configured for channel {channel.value}", status=0
             )
         payload = attempt.model_dump(mode="json")
+        if channel is DeliveryChannel.SLACK:
+            identity = await self._identity_repo.get_slack_identity(
+                tenant_id=attempt.tenant_id, rep_id=attempt.rep_id
+            )
+            if identity is None:
+                raise MessagingDeliveryError(
+                    f"No Slack identity for rep {attempt.rep_id}", status=0
+                )
+            payload["slack_user_id"] = identity.external_user_id
+            payload["dm_channel_id"] = identity.dm_channel_id
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         headers = {

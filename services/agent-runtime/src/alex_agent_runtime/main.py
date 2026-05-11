@@ -22,6 +22,7 @@ from .routes.connections import router as connections_router
 from .routes.events import router as events_router
 from .routes.health import router as health_router
 from .routes.ingestion import router as ingestion_router
+from .routes.onboarding import router as onboarding_router
 from .services.agent_backend import build_default_backend
 from .services.approval_expiry_scan import (
     APPROVAL_EXPIRY_SCAN_INTERVAL_SECONDS,
@@ -50,6 +51,10 @@ from .services.messaging_delivery_client import (
     build_default_messaging_delivery_client,
 )
 from .services.output_router import OutputRouter, attach_router
+from .services.oauth_orchestrator import OAuthOrchestrator
+from .services.oauth_provider import build_default_oauth_provider
+from .services.onboarding_conversation import OnboardingConversationFlow
+from .services.onboarding_state_repo import OnboardingStateRepo
 from .services.voice_applicator import VoiceApplicator
 from .services.voice_profile_store import VoiceProfileStore
 from .services.voice_signal_extractor import VoiceSignalExtractor
@@ -152,6 +157,16 @@ async def lifespan(app: FastAPI):
     )
     attach_updater(bus=event_bus, updater=voice_updater)
     voice_applicator = VoiceApplicator(store=voice_profile_store)
+    onboarding_state_repo = OnboardingStateRepo()
+    oauth_provider = build_default_oauth_provider(settings)
+    oauth_orchestrator = OAuthOrchestrator(
+        provider=oauth_provider,
+        state_repo=onboarding_state_repo,
+    )
+    onboarding_flow = OnboardingConversationFlow(
+        state_repo=onboarding_state_repo,
+        output_router=output_router,
+    )
     meeting_emitter = MeetingEventEmitter(event_bus)
     meeting_classifier = MeetingClassifier(
         memory_store=memory_store,
@@ -190,6 +205,10 @@ async def lifespan(app: FastAPI):
     app.state.voice_profile_store = voice_profile_store
     app.state.voice_updater = voice_updater
     app.state.voice_applicator = voice_applicator
+    app.state.onboarding_state_repo = onboarding_state_repo
+    app.state.oauth_provider = oauth_provider
+    app.state.oauth_orchestrator = oauth_orchestrator
+    app.state.onboarding_flow = onboarding_flow
     app.state.meeting_emitter = meeting_emitter
     app.state.meeting_classifier = meeting_classifier
     app.state.meeting_completion_scan = meeting_completion_scan
@@ -227,6 +246,7 @@ async def lifespan(app: FastAPI):
             getattr(crm_fetch_client, "close", None),
             getattr(crm_write_client, "close", None),
             getattr(messaging_delivery_client, "close", None),
+            getattr(oauth_provider, "close", None),
         ):
             if closer is not None:
                 await closer()
@@ -246,6 +266,7 @@ def create_app() -> FastAPI:
     app.include_router(callbacks_router)
     app.include_router(connections_router)
     app.include_router(ingestion_router)
+    app.include_router(onboarding_router)
     return app
 
 

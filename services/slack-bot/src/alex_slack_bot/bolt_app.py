@@ -84,11 +84,17 @@ def create_bolt_app(
     async def on_slash_alex(ack, respond, command):  # noqa: ARG001
         await ack()
         text = (command.get("text") or "").strip()
+        if text == "onboard":
+            await _start_onboarding(
+                respond=respond, command=command, runtime_client=runtime_client
+            )
+            return
         if text in {"help", ""}:
             await respond(
                 response_type="ephemeral",
                 text=(
                     "Commands:\n"
+                    "• `/alex onboard` — set up Alex (~15 min, conversational)\n"
                     "• `/alex prefs` — see your delivery preferences\n"
                     "• `/alex pause` — pause non-urgent DMs"
                 ),
@@ -100,7 +106,114 @@ def create_bolt_app(
         else:
             await respond(response_type="ephemeral", text=f"Unknown command: `{text}`. Try `/alex help`.")
 
+    # ----- Onboarding action handlers (action_id like onboarding.connect.close) ----
+    for connector in ("close", "google", "krisp"):
+        app.action({"action_id": f"onboarding.connect.{connector}"})(
+            _build_connect_handler(connector=connector, runtime_client=runtime_client)
+        )
+    for connector in ("krisp",):
+        app.action({"action_id": f"onboarding.skip.{connector}"})(
+            _build_skip_handler(connector=connector, runtime_client=runtime_client)
+        )
+
     return app, runtime_client
+
+
+# ---------------------------------------------------------------------------
+# Onboarding handlers
+# ---------------------------------------------------------------------------
+async def _start_onboarding(*, respond, command, runtime_client: RuntimeClient) -> None:
+    """Forward `/alex onboard` to the runtime's start_for_slack_user.
+
+    The runtime resolves (or provisions) the rep, kicks off the
+    conversation flow, and immediately POSTs the welcome card back to
+    the bot's `/deliver` endpoint. We just acknowledge so Slack closes
+    the slash command UI."""
+    settings = get_settings()
+    tenant_id = settings.alex_demo_tenant_id or command.get("team_id") or ""
+    if not tenant_id:
+        await respond(response_type="ephemeral", text="Couldn't resolve workspace.")
+        return
+    slack_user_id = command.get("user_id", "")
+    try:
+        await runtime_client.post_onboarding_start(
+            tenant_id=tenant_id,
+            slack_user_id=slack_user_id,
+            slack_team_id=command.get("team_id"),
+            display_name=command.get("user_name"),
+        )
+    except Exception as exc:  # pragma: no cover — surfaced to the rep
+        log.exception("slack.onboarding.start_failed", error=str(exc))
+        await respond(
+            response_type="ephemeral",
+            text=f"Couldn't kick off onboarding: {exc}",
+        )
+        return
+    await respond(
+        response_type="ephemeral",
+        text="I'll DM you the first step in a moment.",
+    )
+
+
+def _build_connect_handler(*, connector: str, runtime_client: RuntimeClient):
+    async def _handler(ack, body):
+        await ack()
+        payload = _parse_button_value(body) or {}
+        tenant_id = payload.get("tenant_id") or get_settings().alex_demo_tenant_id or ""
+        rep_id = payload.get("rep_id")
+        if not tenant_id or not rep_id:
+            log.warning("slack.onboarding.connect.no_payload", connector=connector)
+            return
+        try:
+            response = await runtime_client.post_onboarding_initiate(
+                tenant_id=tenant_id,
+                rep_id=rep_id,
+                connector=connector,
+            )
+        except Exception as exc:
+            log.exception("slack.onboarding.initiate_failed", connector=connector, error=str(exc))
+            return
+        # In stub mode the runtime returns a stub URL we can short-circuit
+        # — fetching it completes the OAuth round-trip locally. In real
+        # OAuth mode we'd post the URL back to the rep so they can
+        # authorise in the browser.
+        if response.get("stub"):
+            try:
+                await runtime_client.get_url(
+                    url=str(response["authorize_url"]),
+                    tenant_id=tenant_id,
+                )
+            except Exception as exc:
+                log.exception(
+                    "slack.onboarding.stub_complete_failed",
+                    connector=connector,
+                    error=str(exc),
+                )
+
+    _handler.__qualname__ = f"on_onboarding_connect_{connector}"
+    return _handler
+
+
+def _build_skip_handler(*, connector: str, runtime_client: RuntimeClient):
+    async def _handler(ack, body):
+        await ack()
+        payload = _parse_button_value(body) or {}
+        tenant_id = payload.get("tenant_id") or get_settings().alex_demo_tenant_id or ""
+        rep_id = payload.get("rep_id")
+        if not tenant_id or not rep_id:
+            log.warning("slack.onboarding.skip.no_payload", connector=connector)
+            return
+        try:
+            await runtime_client.post_onboarding_skip(
+                tenant_id=tenant_id,
+                rep_id=rep_id,
+                connector=connector,
+            )
+        except Exception as exc:
+            log.exception("slack.onboarding.skip_failed", connector=connector, error=str(exc))
+
+    _handler.__qualname__ = f"on_onboarding_skip_{connector}"
+    return _handler
 
 
 # ---------------------------------------------------------------------------

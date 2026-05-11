@@ -50,6 +50,11 @@ class Settings(BaseSettings):
         description="Used to HMAC-sign the OAuth `state` parameter so we can verify it on callback.",
     )
 
+    # Onboarding (WO #15). Demo mode: the slash command uses this as the
+    # tenant_id when the Slack team isn't already mapped to a runtime
+    # tenant. Set per-deployment.
+    alex_demo_tenant_id: str = ""
+
     @property
     def webhook_signing_enforced(self) -> bool:
         return bool(self.alex_webhook_secret)

@@ -126,6 +126,19 @@ class Settings(BaseSettings):
     voice_update_min_alpha: float = 0.05
     voice_update_decay: float = 1.0
 
+    # WO #15 / #16 — Onboarding. ``stub`` synthesises a successful OAuth
+    # round-trip so the Slack flow can be walked without real CRM
+    # credentials. ``pipedream`` points the orchestrator at per-connector
+    # workflow URLs that handle the real provider redirect.
+    oauth_provider: str = "stub"
+    alex_pipedream_oauth_close_url: str = ""
+    alex_pipedream_oauth_google_url: str = ""
+    alex_pipedream_oauth_krisp_url: str = ""
+    # Public URL of the runtime — used by StubOAuthProvider to build the
+    # short-circuit "authorize" URL it points the Slack bot at. Leave
+    # empty in tests; the orchestrator falls back to the relative URL.
+    alex_agent_runtime_public_url: str = ""
+
     @property
     def has_real_embedding_client(self) -> bool:
         return bool(self.openai_api_key)

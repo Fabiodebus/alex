@@ -59,6 +59,68 @@ class RuntimeClient:
             },
         )
 
+    async def post_onboarding_start(
+        self,
+        *,
+        tenant_id: str,
+        slack_user_id: str,
+        slack_team_id: str | None,
+        display_name: str | None = None,
+        email: str | None = None,
+    ) -> dict[str, object]:
+        return await self._post(
+            path="/onboarding/start_for_slack_user",
+            tenant_id=tenant_id,
+            payload={
+                "slack_user_id": slack_user_id,
+                "slack_team_id": slack_team_id,
+                "slack_display_name": display_name,
+                "slack_email": email,
+            },
+        )
+
+    async def post_onboarding_initiate(
+        self,
+        *,
+        tenant_id: str,
+        rep_id: str,
+        connector: str,
+    ) -> dict[str, object]:
+        return await self._post(
+            path="/onboarding/oauth/initiate",
+            tenant_id=tenant_id,
+            payload={"rep_id": rep_id, "connector": connector},
+        )
+
+    async def post_onboarding_skip(
+        self,
+        *,
+        tenant_id: str,
+        rep_id: str,
+        connector: str,
+    ) -> dict[str, object]:
+        return await self._post(
+            path="/onboarding/skip",
+            tenant_id=tenant_id,
+            payload={"rep_id": rep_id, "connector": connector},
+        )
+
+    async def get_url(self, *, url: str, tenant_id: str) -> dict[str, object]:
+        """Generic GET used by the stub OAuth completion redirect."""
+        headers = {"X-Tenant-Id": tenant_id}
+        response = await self._http.get(url, headers=headers, timeout=15.0)
+        try:
+            parsed = response.json()
+        except ValueError:
+            parsed = None
+        if response.status_code >= 400:
+            raise RuntimeClientError(
+                f"runtime GET {url} returned {response.status_code}",
+                status=response.status_code,
+                body=parsed,
+            )
+        return parsed if isinstance(parsed, dict) else {"raw": parsed}
+
     async def _post(self, *, path: str, tenant_id: str, payload: dict[str, object]) -> dict[str, object]:
         if not self._settings.alex_agent_runtime_url:
             raise RuntimeClientError(

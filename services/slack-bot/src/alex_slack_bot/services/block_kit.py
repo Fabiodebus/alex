@@ -27,7 +27,15 @@ ACTION_STYLES: dict[str, str | None] = {
 
 
 def render_agent_output(output: AgentOutput) -> list[dict[str, Any]]:
-    """Return Block Kit blocks for a single AgentOutput."""
+    """Return Block Kit blocks for a single AgentOutput.
+
+    When ``output.metadata`` contains an ``actions`` list (used by the
+    onboarding conversation flow), the renderer treats it as the
+    explicit Block-Kit action spec and skips the default approve/edit/
+    discard buttons. The custom shape is::
+
+        [{"action_id": "...", "label": "...", "value": {...}, "style": "primary"}]
+    """
     blocks: list[dict[str, Any]] = [
         {
             "type": "header",
@@ -38,10 +46,15 @@ def render_agent_output(output: AgentOutput) -> list[dict[str, Any]]:
             "text": {"type": "mrkdwn", "text": output.body},
         },
     ]
-    if output.metadata:
+    custom_actions = _custom_actions(output.metadata)
+    if custom_actions:
+        blocks.append(_actions_block(custom_actions))
+        # Metadata is shown as context only when no custom button spec —
+        # the onboarding flow doesn't want a metadata footer.
+    elif output.metadata:
         blocks.append({"type": "context", "elements": _context_elements(output.metadata)})
 
-    if output.actions:
+    if not custom_actions and output.actions:
         blocks.append(
             {
                 "type": "actions",
@@ -53,6 +66,33 @@ def render_agent_output(output: AgentOutput) -> list[dict[str, Any]]:
             }
         )
     return blocks
+
+
+def _custom_actions(metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = metadata.get("actions") if isinstance(metadata, dict) else None
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for entry in raw:
+        if isinstance(entry, dict) and "action_id" in entry and "label" in entry:
+            out.append(entry)
+    return out
+
+
+def _actions_block(actions: list[dict[str, Any]]) -> dict[str, Any]:
+    elements: list[dict[str, Any]] = []
+    for action in actions:
+        button: dict[str, Any] = {
+            "type": "button",
+            "action_id": action["action_id"],
+            "text": {"type": "plain_text", "text": action["label"], "emoji": True},
+            "value": json.dumps(action.get("value") or {}),
+        }
+        style = action.get("style")
+        if isinstance(style, str):
+            button["style"] = style
+        elements.append(button)
+    return {"type": "actions", "block_id": "alex_custom_actions", "elements": elements}
 
 
 def _button(*, action: str, task_id: str, rep_id: str) -> dict[str, Any]:

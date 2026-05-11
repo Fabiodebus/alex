@@ -1032,3 +1032,140 @@ class DiscardSignal(BaseModel):
     language: VoiceLanguage = VoiceLanguage.EN
     discarded_body: str
     feedback: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# WO #15 / #16 — Onboarding (Conversational Flow, OAuth, Activation)
+# ---------------------------------------------------------------------------
+class OnboardingConnector(StrEnum):
+    """Connectors offered in the v1 onboarding sequence.
+
+    Slack is the messaging surface itself, not a connector here. The
+    connector list mirrors the user-chosen v1 set: Close (CRM),
+    Google (email + calendar paired into a single OAuth step), and
+    Krisp.ai (recording, optional)."""
+
+    CLOSE = "close"
+    GOOGLE = "google"
+    KRISP = "krisp"
+
+
+class OnboardingStep(StrEnum):
+    WELCOME = "welcome"
+    CONNECT_CLOSE = "connect_close"
+    CONNECT_GOOGLE = "connect_google"
+    CONNECT_KRISP = "connect_krisp"
+    INGESTING = "ingesting"
+    AWAITING_FIRST_OUTPUT = "awaiting_first_output"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ConnectorConnectionStatus(StrEnum):
+    NOT_STARTED = "not_started"
+    PENDING = "pending"
+    CONNECTED = "connected"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
+class ConnectorStatus(BaseModel):
+    """Per-connector slice of OnboardingState.connector_status."""
+
+    status: ConnectorConnectionStatus = ConnectorConnectionStatus.NOT_STARTED
+    attempted_at: datetime | None = None
+    connected_at: datetime | None = None
+    token_ref: str | None = None
+    failure_reason: str | None = None
+
+
+class OnboardingState(BaseModel):
+    """Read model returned by :class:`OnboardingStateRepo`."""
+
+    id: UUID
+    tenant_id: UUID
+    rep_id: UUID
+    current_step: OnboardingStep
+    completed_steps: list[OnboardingStep] = Field(default_factory=list)
+    connector_status: dict[OnboardingConnector, ConnectorStatus] = Field(
+        default_factory=dict
+    )
+    started_at: datetime | None = None
+    ingestion_complete_at: datetime | None = None
+    first_proactive_at: datetime | None = None
+    activation_milestone_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class OAuthInitiation(BaseModel):
+    """Returned by :meth:`OAuthOrchestrator.initiate`."""
+
+    connector: OnboardingConnector
+    state: str = Field(min_length=8, description="CSRF + correlation token")
+    authorize_url: str
+    stub: bool = False
+    expires_at: datetime
+
+
+class OAuthCompletion(BaseModel):
+    """Outcome of :meth:`OAuthOrchestrator.handle_callback`."""
+
+    connector: OnboardingConnector
+    success: bool
+    token_ref: str | None = None
+    failure_reason: str | None = None
+    rep_id: UUID
+    tenant_id: UUID
+
+
+class OnboardingMessage(BaseModel):
+    """Block-Kit-friendly payload OutputRouter ships to the Slack bot."""
+
+    rep_id: UUID
+    tenant_id: UUID
+    step: OnboardingStep
+    title: str
+    body: str
+    actions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="List of {action_id, label, value, style?} entries the bot renders as buttons.",
+    )
+
+
+class OnboardingProgress(BaseModel):
+    """Published on the EventBus when onboarding state advances."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    step: OnboardingStep
+    completed_connectors: list[OnboardingConnector] = Field(default_factory=list)
+
+
+class FirstProactiveOutputType(StrEnum):
+    """The blueprint's three priority-ordered first-output categories."""
+
+    MEETING_PREP = "meeting_prep"
+    FOLLOW_UP_DRAFT = "follow_up_draft"
+    STALLED_DEAL_SUMMARY = "stalled_deal_summary"
+    FALLBACK_INTRO = "fallback_intro"
+
+
+class FirstProactiveSelection(BaseModel):
+    """What :class:`ActivationTracker` picked + why."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    output_type: FirstProactiveOutputType
+    reason: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class ActivationMilestone(BaseModel):
+    """Published when the rep approves their first agent-generated draft."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    task_id: UUID
+    achieved_at: datetime
