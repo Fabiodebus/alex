@@ -11,7 +11,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class EventKind(StrEnum):
@@ -409,3 +409,174 @@ class CRMSyncResult(BaseModel):
     external_id: str
     cached: bool  # True iff the record was written/refreshed in MemoryStore
     deduplicated: bool  # True iff the record's content hash already existed
+
+
+# ---------------------------------------------------------------------------
+# WO #10 — CRM Integration: CRMWriter & CRMValidator
+# ---------------------------------------------------------------------------
+class FieldUpdate(BaseModel):
+    """A single field-level write proposal.
+
+    The blueprint's safety rule is enforced here at the type level: every
+    update MUST carry ``current_value`` alongside ``proposed_value`` so the
+    approval payload can display both. ``None`` is a legal current value
+    (the field is empty today), but the field itself must be present.
+    """
+
+    platform: CRMPlatform
+    kind: CRMRecordKind
+    external_id: str
+    field_name: str = Field(min_length=1)
+    current_value: Any = Field(
+        default=None,
+        description=(
+            "What the CRM holds today. Caller (the feature workflow) is "
+            "responsible for populating this from a fresh CRMReader read."
+        ),
+    )
+    proposed_value: Any = None
+
+    # Distinguishes 'caller didn't set current_value at all' (rejected by
+    # CRMValidator) from 'caller explicitly set it to None / null'. Set
+    # automatically from `model_fields_set` so callers can't bypass the
+    # safety rule by omitting the field.
+    has_current_value: bool = True
+
+    @model_validator(mode="after")
+    def _capture_current_value_presence(self) -> "FieldUpdate":
+        if "current_value" not in self.model_fields_set and "has_current_value" not in self.model_fields_set:
+            object.__setattr__(self, "has_current_value", False)
+        return self
+
+
+class CRMNote(BaseModel):
+    """A free-text note attached to an opportunity/contact/account.
+
+    Notes are append-only on the CRM side so they bypass the
+    'current_value' rule, but they still flow through CRMWriter so they
+    are audit-logged.
+    """
+
+    platform: CRMPlatform
+    kind: CRMRecordKind
+    external_id: str
+    body: str = Field(min_length=1)
+    title: str | None = None
+
+
+class ValidatedFieldUpdate(BaseModel):
+    """A FieldUpdate that has cleared CRMValidator.
+
+    Carries the original update plus a ``normalized_value`` produced by
+    the platform-specific validator (e.g. enum lookups resolved to the
+    platform's canonical option_id, currency strings uppercased)."""
+
+    update: FieldUpdate
+    normalized_value: Any
+    platform_field_id: str | None = Field(
+        default=None,
+        description="Platform-specific field identifier when distinct from field_name.",
+    )
+
+
+class CRMValidationError(BaseModel):
+    """Structured rejection from CRMValidator."""
+
+    code: str
+    message: str
+    field_name: str | None = None
+
+
+class CRMValidationResult(BaseModel):
+    """Validator output for a single FieldUpdate."""
+
+    validated: ValidatedFieldUpdate | None = None
+    error: CRMValidationError | None = None
+
+    @property
+    def is_valid(self) -> bool:
+        return self.validated is not None and self.error is None
+
+
+class DryRunCRMRequest(BaseModel):
+    """A batch of proposed updates the caller wants to preview.
+
+    Distinct from the older ``DryRunRequest`` (which targets the existing
+    Pipedream ``dry_run_crm_write`` action) because this batch operates
+    entirely inside the runtime — no Pipedream round-trip — and so feature
+    workflows can build the rep-facing diff without leaving the process.
+    """
+
+    tenant_id: UUID
+    rep_id: UUID
+    updates: list[FieldUpdate] = Field(default_factory=list)
+    notes: list[CRMNote] = Field(default_factory=list)
+
+
+class DryRunCRMResult(BaseModel):
+    """Resolution of a ``DryRunCRMRequest``.
+
+    Carries enough detail for the messaging surface to render the "before
+    -> after" approval card without re-running validation.
+    """
+
+    valid: bool
+    validated_updates: list[ValidatedFieldUpdate] = Field(default_factory=list)
+    errors: list[CRMValidationError] = Field(default_factory=list)
+    notes: list[CRMNote] = Field(default_factory=list)
+
+
+class CRMWriteStatus(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    REJECTED = "rejected"  # validator-side reject; never dispatched
+
+
+class CRMWriteRequest(BaseModel):
+    """What CRMWriter sends downstream (Pipedream) once a write is approved.
+
+    Mirrors the ``ActionRequest`` shape so the existing dispatch path can
+    consume it, but typed for the CRM-write subset so the wire contract
+    is enforced by Pydantic rather than by convention."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    approver_rep_id: UUID | None = None
+    platform: CRMPlatform
+    kind: CRMRecordKind
+    external_id: str
+    field_updates: list[ValidatedFieldUpdate] = Field(default_factory=list)
+    notes: list[CRMNote] = Field(default_factory=list)
+    idempotency_key: str = Field(
+        description="Caller-provided dedup key — survives retries on the Pipedream side.",
+    )
+
+
+class CRMWriteResult(BaseModel):
+    """What CRMWriter returns after dispatching."""
+
+    status: CRMWriteStatus
+    platform: CRMPlatform
+    external_id: str
+    succeeded_fields: list[str] = Field(default_factory=list)
+    failed_fields: list[str] = Field(default_factory=list)
+    error: CRMValidationError | None = None
+    audit_log_id: UUID | None = None
+    raw_response: dict[str, Any] = Field(default_factory=dict)
+
+
+class CRMWriteFailed(BaseModel):
+    """Published on the EventBus when a dispatched write fails.
+
+    Notification Delivery (WO #13) subscribes and routes a plain-language
+    message to the rep. Carried fields are the minimum needed to render
+    that message without re-querying the CRM.
+    """
+
+    tenant_id: UUID
+    rep_id: UUID
+    platform: CRMPlatform
+    external_id: str
+    field_names: list[str] = Field(default_factory=list)
+    reason: str
+    audit_log_id: UUID | None = None

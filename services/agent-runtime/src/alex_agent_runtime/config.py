@@ -101,6 +101,13 @@ class Settings(BaseSettings):
     crm_fetch_provider: str = "stub"
     alex_pipedream_crm_fetch_url: str = ""
 
+    # WO #10 — CRMWriter / approved-write dispatch via Pipedream
+    # `crm_write`. Symmetric to crm_fetch_provider. ``stub`` echoes
+    # success locally so the runtime can be exercised end-to-end without
+    # a live Pipedream workflow.
+    crm_write_provider: str = "stub"
+    alex_pipedream_crm_write_url: str = ""
+
     @property
     def has_real_embedding_client(self) -> bool:
         return bool(self.openai_api_key)
