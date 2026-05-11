@@ -29,6 +29,13 @@ from .services.crm_reader import CRMReader
 from .services.crm_validator import CRMValidator
 from .services.crm_write_client import build_default_crm_write_client
 from .services.crm_writer import CRMWriter
+from .services.meeting_classifier import MeetingClassifier
+from .services.meeting_completion_scan import (
+    MEETING_COMPLETION_SCAN_INTERVAL_SECONDS,
+    MeetingCompletionScan,
+    build_completion_scan_job,
+)
+from .services.meeting_events import MeetingEventEmitter
 from .services.embedding_client import build_default_embedding_client
 from .services.event_bus import EventBus
 from .services.event_processor import EventProcessor
@@ -90,6 +97,16 @@ async def lifespan(app: FastAPI):
     crm_validator = CRMValidator()
     crm_write_client = build_default_crm_write_client(settings)
     crm_writer = CRMWriter(write_client=crm_write_client, event_bus=event_bus)
+    meeting_emitter = MeetingEventEmitter(event_bus)
+    meeting_classifier = MeetingClassifier(
+        memory_store=memory_store,
+        emitter=meeting_emitter,
+    )
+    feature_router.register("calendar.update", meeting_classifier.handle_calendar_update)
+    meeting_completion_scan = MeetingCompletionScan(
+        memory_store=memory_store,
+        emitter=meeting_emitter,
+    )
 
     app.state.feature_router = feature_router
     app.state.agent_backend = agent_backend
@@ -107,11 +124,19 @@ async def lifespan(app: FastAPI):
     app.state.crm_validator = crm_validator
     app.state.crm_write_client = crm_write_client
     app.state.crm_writer = crm_writer
+    app.state.meeting_emitter = meeting_emitter
+    app.state.meeting_classifier = meeting_classifier
+    app.state.meeting_completion_scan = meeting_completion_scan
 
     scheduler.add_interval_job(
         heartbeat,
         seconds=settings.scheduler_heartbeat_seconds,
         job_id="heartbeat",
+    )
+    scheduler.add_interval_job(
+        build_completion_scan_job(meeting_completion_scan),
+        seconds=MEETING_COMPLETION_SCAN_INTERVAL_SECONDS,
+        job_id="meeting_completion_scan",
     )
     scheduler.start()
 

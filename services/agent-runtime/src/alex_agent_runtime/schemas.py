@@ -580,3 +580,123 @@ class CRMWriteFailed(BaseModel):
     field_names: list[str] = Field(default_factory=list)
     reason: str
     audit_log_id: UUID | None = None
+
+
+# ---------------------------------------------------------------------------
+# WO #11 — Calendar & Meeting Detection
+# ---------------------------------------------------------------------------
+class CalendarProvider(StrEnum):
+    GOOGLE = "google_calendar"
+    OUTLOOK = "outlook_calendar"
+
+
+class CalendarEventStatus(StrEnum):
+    CONFIRMED = "confirmed"
+    TENTATIVE = "tentative"
+    CANCELLED = "cancelled"
+
+
+class CalendarAttendee(BaseModel):
+    email: str
+    name: str | None = None
+    response_status: str | None = Field(
+        default=None,
+        description="provider-native response state (accepted/declined/tentative/needsAction)",
+    )
+    is_organizer: bool = False
+
+
+class CalendarEvent(BaseModel):
+    """Canonical calendar payload produced by the Pipedream side.
+
+    Both Google Calendar and Outlook Calendar are folded into this
+    shape upstream so :class:`MeetingClassifier` operates on a single
+    schema."""
+
+    provider: CalendarProvider
+    calendar_event_id: str = Field(min_length=1)
+    tenant_id: UUID
+    rep_id: UUID
+    rep_email: str
+    title: str | None = None
+    description: str | None = None
+    location: str | None = None
+    start_at: datetime
+    end_at: datetime
+    status: CalendarEventStatus = CalendarEventStatus.CONFIRMED
+    organizer_email: str | None = None
+    attendees: list[CalendarAttendee] = Field(default_factory=list)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class AttendeeProfile(BaseModel):
+    """An attendee after CRM resolution + classification.
+
+    ``is_external`` is True iff the attendee's email domain differs from
+    the rep's. ``crm_contact_external_id`` and ``crm_account_external_id``
+    are populated when MeetingClassifier successfully joins to a cached
+    CRM contact/account; ``None`` when no match was found.
+    """
+
+    email: str
+    name: str | None = None
+    is_external: bool
+    response_status: str | None = None
+    is_organizer: bool = False
+    crm_contact_external_id: str | None = None
+    crm_account_external_id: str | None = None
+
+
+class MeetingDetected(BaseModel):
+    """Published when a CalendarEvent has been classified and resolved.
+
+    Per the blueprint, ``opportunity_external_id`` is null when no CRM
+    match was found — downstream features are responsible for handling
+    the no-opportunity case rather than suppressing output."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    calendar_event_id: str
+    provider: CalendarProvider
+    start_at: datetime
+    end_at: datetime
+    trigger_at: datetime = Field(
+        description="When downstream features (e.g. Meeting Prep) should fire.",
+    )
+    title: str | None = None
+    is_external: bool
+    attendee_profiles: list[AttendeeProfile] = Field(default_factory=list)
+    opportunity_external_id: str | None = None
+    account_external_id: str | None = None
+    crm_platform: CRMPlatform | None = None
+
+
+class MeetingCompleted(BaseModel):
+    tenant_id: UUID
+    rep_id: UUID
+    calendar_event_id: str
+    provider: CalendarProvider
+    start_at: datetime
+    end_at: datetime
+    title: str | None = None
+    opportunity_external_id: str | None = None
+    account_external_id: str | None = None
+    crm_platform: CRMPlatform | None = None
+
+
+class MeetingCancelled(BaseModel):
+    tenant_id: UUID
+    rep_id: UUID
+    calendar_event_id: str
+    provider: CalendarProvider
+    title: str | None = None
+    opportunity_external_id: str | None = None
+
+
+class CalendarLifecycleState(StrEnum):
+    """Internal book-keeping written into the memory row's attributes so
+    the completion-scan job can tell which events are still pending."""
+
+    DETECTED = "detected"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
