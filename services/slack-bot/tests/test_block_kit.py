@@ -15,7 +15,14 @@ def _output(**overrides):
         "slack_user_id": "U123",
         "title": "Discovery call: Acme Corp",
         "body": "*Brief*: Lead from inbound demo request.",
-        "metadata": {"deal_id": "deal-7", "stage": "discovery"},
+        # ``_context_keys`` opts in to the context footer — only the
+        # named fields are rendered, so internal bookkeeping never
+        # leaks into the rep-facing card.
+        "metadata": {
+            "deal_id": "deal-7",
+            "stage": "discovery",
+            "_context_keys": ["deal_id", "stage"],
+        },
     }
     base.update(overrides)
     return AgentOutput(**base)
@@ -50,11 +57,20 @@ def test_button_value_encodes_task_and_rep():
 
 
 def test_render_handles_metadata_caps():
-    metadata = {f"k{i}": i for i in range(20)}
+    keys = [f"k{i}" for i in range(20)]
+    metadata = {**{k: i for i, k in enumerate(keys)}, "_context_keys": keys}
     blocks = render_agent_output(_output(metadata=metadata))
     context = next(b for b in blocks if b["type"] == "context")
     # Block Kit caps context elements at 10.
     assert len(context["elements"]) == 10
+
+
+def test_render_omits_context_block_when_not_opted_in():
+    """Metadata without ``_context_keys`` is treated as internal
+    bookkeeping and never rendered into the card."""
+    output = _output(metadata={"records_processed": 4, "actions": []})
+    blocks = render_agent_output(output)
+    assert all(b["type"] != "context" for b in blocks)
 
 
 def test_render_omits_actions_block_when_empty():

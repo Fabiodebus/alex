@@ -169,6 +169,7 @@ class ActivationTracker:
                 title="Initial ingestion complete",
                 body=body,
                 metadata={
+                    "actions": [],  # informational only — no approve/edit/discard
                     "records_processed": r.records_processed,
                     "memories_written": r.memories_written,
                     "memories_deduplicated": r.memories_deduplicated,
@@ -242,6 +243,10 @@ class ActivationTracker:
                 title=title,
                 body=body,
                 metadata={
+                    # Introduction card — no actions; real generators
+                    # (meeting prep / follow-up / stalled-deal) will
+                    # render their own approval buttons in Phase 4.
+                    "actions": [],
                     "first_proactive": True,
                     "selection_type": selection.output_type.value,
                     "reason": selection.reason,
@@ -263,7 +268,7 @@ class ActivationTracker:
                     "running. I'll keep getting better as you edit and approve more "
                     "of my work. You can pause me any time with `/alex pause`."
                 ),
-                metadata={"task_id": str(event.task_id)},
+                metadata={"actions": [], "task_id": str(event.task_id)},
             )
         )
 

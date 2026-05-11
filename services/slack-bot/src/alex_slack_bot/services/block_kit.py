@@ -29,13 +29,17 @@ ACTION_STYLES: dict[str, str | None] = {
 def render_agent_output(output: AgentOutput) -> list[dict[str, Any]]:
     """Return Block Kit blocks for a single AgentOutput.
 
-    When ``output.metadata`` contains an ``actions`` list (used by the
-    onboarding conversation flow), the renderer treats it as the
-    explicit Block-Kit action spec and skips the default approve/edit/
-    discard buttons. The custom shape is::
-
-        [{"action_id": "...", "label": "...", "value": {...}, "style": "primary"}]
+    When ``output.metadata`` contains an ``actions`` *key* (even if the
+    list is empty), the runtime is in charge of the button block —
+    we skip the default approve/edit/discard buttons entirely. Empty
+    list = "this output has no actions" (e.g. an onboarding welcome
+    or status update). Non-empty list = custom buttons rendered from
+    the spec ``{"action_id", "label", "value", "style"}``.
     """
+    metadata = output.metadata if isinstance(output.metadata, dict) else {}
+    has_actions_key = "actions" in metadata
+    custom_actions = _custom_actions(metadata)
+
     blocks: list[dict[str, Any]] = [
         {
             "type": "header",
@@ -46,15 +50,21 @@ def render_agent_output(output: AgentOutput) -> list[dict[str, Any]]:
             "text": {"type": "mrkdwn", "text": output.body},
         },
     ]
-    custom_actions = _custom_actions(output.metadata)
+
     if custom_actions:
         blocks.append(_actions_block(custom_actions))
-        # Metadata is shown as context only when no custom button spec —
-        # the onboarding flow doesn't want a metadata footer.
-    elif output.metadata:
-        blocks.append({"type": "context", "elements": _context_elements(output.metadata)})
 
-    if not custom_actions and output.actions:
+    # Context footer is opt-in: only render when the runtime passes
+    # ``_context_keys`` listing the metadata fields the rep should see.
+    # Internal bookkeeping (selection_type, reason, etc.) stays in the
+    # row but doesn't pollute the Slack card.
+    visible_keys = metadata.get("_context_keys")
+    if isinstance(visible_keys, list) and visible_keys:
+        visible_meta = {k: metadata[k] for k in visible_keys if k in metadata}
+        if visible_meta:
+            blocks.append({"type": "context", "elements": _context_elements(visible_meta)})
+
+    if not has_actions_key and output.actions:
         blocks.append(
             {
                 "type": "actions",
