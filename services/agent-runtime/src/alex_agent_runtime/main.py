@@ -18,6 +18,7 @@ from .db import dispose_engine, init_engine
 from .jobs.heartbeat import heartbeat
 from .middleware import TenantHeaderMiddleware, WebhookSignatureMiddleware
 from .routes.callbacks import router as callbacks_router
+from .routes.connections import router as connections_router
 from .routes.events import router as events_router
 from .routes.health import router as health_router
 from .services.agent_backend import build_default_backend
@@ -88,6 +89,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(events_router)
     app.include_router(callbacks_router)
+    app.include_router(connections_router)
     return app
 
 

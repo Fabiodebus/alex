@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     webhook_timestamp_header: str = "X-Alex-Timestamp"
     webhook_signature_max_age_seconds: int = 300
 
+    # Base URL for the Pipedream outbound workflow endpoints. Each
+    # workflow has its own URL slug appended (e.g. /hubspot_crm_write).
+    # Leave empty in tests; PipedreamClient raises PipedreamConfigError if
+    # asked to dispatch without it.
+    pipedream_base_url: str = ""
+
     @property
     def has_real_agent_backend(self) -> bool:
         return bool(self.anthropic_api_key)

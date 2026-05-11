@@ -73,9 +73,21 @@ The deployer should set these environment variables on the Pipedream project:
 | `ALEX_WEBHOOK_SECRET` | Shared secret for HMAC signing (same value as the Agent Runtime). |
 | `ALEX_TENANT_ID_RESOLVER` | Optional fallback tenant id when the source payload doesn't carry one. |
 
+## Outbound execution (WO #4)
+
+Five additional reference workflows live under `src/workflows/`:
+
+| Slug | Receives | Executes |
+| --- | --- | --- |
+| `hubspot_crm_write` | signed `ActionRequest` | `PATCH crm/v3/objects/{type}/{id}` |
+| `gmail_send_message` | signed `ActionRequest` | `users.messages.send` |
+| `google_drive_upload` | signed `ActionRequest` | Drive v3 multipart upload |
+| `dry_run_crm_write` | signed `DryRunRequest` | structured `DryRunResponse` |
+| `oauth_relay` | signed `OAuthToken` | persist vault ref + POST `/connections/status` to Agent Runtime |
+
+All outbound workflows verify the inbound HMAC signature with `lib/verifier.mjs` before doing anything. The pure executors in `lib/executors.mjs` are unit-tested against a mocked `fetch` so the wire shape can be locked in without a live OAuth token.
+
 ## What this WO does *not* cover
 
-- Outbound `ActionRequest` execution (CRM writes, email sends) — owned by WO #4.
-- OAuth relay — owned by WO #4.
-- DryRunRequest/DryRunResponse — owned by WO #4.
 - Feature-specific business logic — owned by feature WOs (not in Pipedream).
+- CRM-schema-aware dry-run validation (HubSpot Properties API, Salesforce Field Metadata) — `dryRunCrmWrite` currently does a shape check; future WOs can layer per-CRM schema introspection on top.

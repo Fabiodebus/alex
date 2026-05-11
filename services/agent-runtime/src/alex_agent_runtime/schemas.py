@@ -63,13 +63,85 @@ class AgentResponse(BaseModel):
     backend: str = "stub"
 
 
+class ActionType(StrEnum):
+    CRM_WRITE = "crm.write"
+    EMAIL_SEND = "email.send"
+    DOC_UPLOAD = "doc.upload"
+
+
 class ActionRequest(BaseModel):
     """Approved external write the runtime asks Pipedream to dispatch."""
 
-    action_type: str
+    action_id: str
+    tenant_id: UUID
+    rep_id: UUID
+    approver_rep_id: UUID | None = None
+    action_type: ActionType
     target_system: str
     target_id: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class DryRunRequest(BaseModel):
+    """Validate a proposed CRM write without executing."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    action_type: ActionType
+    target_system: str
+    target_id: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class DryRunResponse(BaseModel):
+    valid: bool
+    target_system: str
+    target_id: str | None
+    preview: dict[str, Any] = Field(default_factory=dict)
+    errors: list[dict[str, str]] = Field(default_factory=list)
+
+
+class ConnectionStatus(StrEnum):
+    CONNECTED = "connected"
+    DISCONNECTED = "disconnected"
+    EXPIRED = "expired"
+    REVOKED = "revoked"
+    ERROR = "error"
+
+
+class OAuthToken(BaseModel):
+    """Forwarded from the Messaging Surface OAuth redirect handler."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    source: str
+    access_token: str
+    refresh_token: str | None = None
+    expires_in: int | None = None
+    scopes: list[str] = Field(default_factory=list)
+
+
+class ConnectionStatusUpdate(BaseModel):
+    """Posted by the OAuth relay workflow once a token has been vaulted."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    source: str
+    status: ConnectionStatus
+    scopes: list[str] = Field(default_factory=list)
+    vault_ref: str | None = None
+
+
+class ConnectionStatusView(BaseModel):
+    """Read model returned by the ConnectionStatus query API."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    source: str
+    status: ConnectionStatus
+    scopes: list[str] = Field(default_factory=list)
+    connected_at: datetime
+    last_seen_at: datetime
 
 
 class AgentOutput(BaseModel):

@@ -9,6 +9,6 @@
   },
   "scripts": {
     "test": "node --test --test-reporter=spec tests/*.test.mjs",
-    "lint": "node --check src/lib/integration_event.mjs src/lib/normalizer.mjs src/lib/forwarder.mjs src/lib/errors.mjs src/lib/activity_log.mjs"
+    "lint": "node --check src/lib/integration_event.mjs src/lib/normalizer.mjs src/lib/forwarder.mjs src/lib/errors.mjs src/lib/activity_log.mjs src/lib/action_request.mjs src/lib/verifier.mjs src/lib/executors.mjs src/lib/dry_run.mjs"
   }
 }
