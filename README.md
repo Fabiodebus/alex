@@ -28,7 +28,7 @@ Then run service-specific commands from each `services/<name>/` directory. See `
 ## Phase 1 status
 
 - [x] WO #1 — Data Layer: Database Schema & Migrations
-- [ ] WO #2 — Agent Runtime: Core Service Scaffold
+- [x] WO #2 — Agent Runtime: Core Service Scaffold
 - [ ] WO #3 — Pipedream Integration Layer: Inbound Event Workflows
 - [ ] WO #4 — Pipedream Integration Layer: Action Execution & OAuth Relay
 - [ ] WO #5 — Messaging Surface: Slack App
