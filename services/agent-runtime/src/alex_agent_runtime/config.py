@@ -42,9 +42,21 @@ class Settings(BaseSettings):
     tenant_header: str = "X-Tenant-Id"
     scheduler_heartbeat_seconds: int = 60
 
+    # Webhook signing — used by both inbound Pipedream events and (later)
+    # Slack/Teams approval callbacks. When empty the middleware is a no-op
+    # so dev environments can hit /events with curl without ceremony.
+    alex_webhook_secret: str = ""
+    webhook_signature_header: str = "X-Alex-Signature"
+    webhook_timestamp_header: str = "X-Alex-Timestamp"
+    webhook_signature_max_age_seconds: int = 300
+
     @property
     def has_real_agent_backend(self) -> bool:
         return bool(self.anthropic_api_key)
+
+    @property
+    def webhook_signing_enforced(self) -> bool:
+        return bool(self.alex_webhook_secret)
 
 
 @lru_cache(maxsize=1)

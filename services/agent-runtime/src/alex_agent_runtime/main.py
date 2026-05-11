@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from .config import get_settings
 from .db import dispose_engine, init_engine
 from .jobs.heartbeat import heartbeat
-from .middleware import TenantHeaderMiddleware
+from .middleware import TenantHeaderMiddleware, WebhookSignatureMiddleware
 from .routes.callbacks import router as callbacks_router
 from .routes.events import router as events_router
 from .routes.health import router as health_router
@@ -79,7 +79,12 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Alex Agent Runtime", version="0.1.0", lifespan=lifespan)
+    # WebhookSignatureMiddleware must run BEFORE TenantHeaderMiddleware so
+    # an unsigned request is rejected without doing tenant lookup work.
+    # FastAPI/Starlette runs middleware in LIFO order (last added = outermost),
+    # so the TenantHeaderMiddleware is added last to appear innermost.
     app.add_middleware(TenantHeaderMiddleware)
+    app.add_middleware(WebhookSignatureMiddleware)
     app.include_router(health_router)
     app.include_router(events_router)
     app.include_router(callbacks_router)

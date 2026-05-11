@@ -1,0 +1,14 @@
+{
+  "name": "alex-pipedream",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pipedream-hosted Integration Layer for Alex. Inbound CRM/calendar/email/recording webhooks normalize to IntegrationEvent and forward to the Agent Runtime.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test --test-reporter=spec tests/*.test.mjs",
+    "lint": "node --check src/lib/integration_event.mjs src/lib/normalizer.mjs src/lib/forwarder.mjs src/lib/errors.mjs src/lib/activity_log.mjs"
+  }
+}
