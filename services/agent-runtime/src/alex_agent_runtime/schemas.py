@@ -320,3 +320,92 @@ class IngestionStartRequest(BaseModel):
     tenant_id: UUID
     rep_id: UUID
     since_days: int = Field(default=90, ge=1, le=365)
+
+
+# ---------------------------------------------------------------------------
+# WO #9 — CRM Integration: CRMReader
+# ---------------------------------------------------------------------------
+class CRMPlatform(StrEnum):
+    HUBSPOT = "hubspot"
+    SALESFORCE = "salesforce"
+    PIPEDRIVE = "pipedrive"
+    CLOSE = "close"
+
+
+class CRMRecordKind(StrEnum):
+    OPPORTUNITY = "opportunity"
+    CONTACT = "contact"
+    ACCOUNT = "account"
+
+
+class CRMStakeholder(BaseModel):
+    """A single contact attached to an opportunity or account."""
+
+    external_id: str | None = None
+    name: str | None = None
+    email: str | None = None
+    title: str | None = None
+    role: str | None = None  # 'economic_buyer' | 'champion' | 'influencer' | ...
+
+
+class CRMRecord(BaseModel):
+    """Canonical CRM record consumed by every feature workflow.
+
+    Feature logic never sees the source CRM's field names — adapters
+    fold platform-specific shapes into this contract. Fields are
+    intentionally permissive (most are optional) so a record that only
+    exposes a subset still round-trips cleanly.
+    """
+
+    platform: CRMPlatform
+    kind: CRMRecordKind
+    external_id: str
+    name: str | None = None
+
+    # Opportunity-specific
+    stage: str | None = None
+    amount_cents: int | None = None
+    currency: str | None = None
+    probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    close_date: datetime | None = None
+    owner_email: str | None = None
+    account_external_id: str | None = None
+    stakeholders: list[CRMStakeholder] = Field(default_factory=list)
+
+    # Contact-specific
+    email: str | None = None
+    title: str | None = None
+    phone: str | None = None
+
+    # Account-specific
+    domain: str | None = None
+    industry: str | None = None
+    country: str | None = None
+
+    # MEDDIC/MEDDPICC fields — populated when the org's CRM mapping
+    # surfaces them. Each entry is a free-text capture from the CRM
+    # rather than an enforced enum (different orgs use different
+    # vocabularies for the same letter).
+    meddic: dict[str, str] = Field(default_factory=dict)
+
+    updated_at: datetime | None = None
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class CRMFetchRequest(BaseModel):
+    """Sent to the Pipedream `crm_fetch` workflow when MemoryStore misses."""
+
+    tenant_id: UUID
+    platform: CRMPlatform
+    kind: CRMRecordKind
+    external_id: str
+
+
+class CRMSyncResult(BaseModel):
+    """Returned by CRMReader.handle for inbound CRMDataSync events."""
+
+    platform: CRMPlatform
+    kind: CRMRecordKind
+    external_id: str
+    cached: bool  # True iff the record was written/refreshed in MemoryStore
+    deduplicated: bool  # True iff the record's content hash already existed

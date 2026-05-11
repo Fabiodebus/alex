@@ -24,6 +24,8 @@ from .routes.health import router as health_router
 from .routes.ingestion import router as ingestion_router
 from .services.agent_backend import build_default_backend
 from .services.approval_handler import ApprovalHandler
+from .services.crm_fetch_client import build_default_crm_fetch_client
+from .services.crm_reader import CRMReader
 from .services.embedding_client import build_default_embedding_client
 from .services.event_bus import EventBus
 from .services.event_processor import EventProcessor
@@ -79,6 +81,9 @@ async def lifespan(app: FastAPI):
         event_bus=event_bus,
         settings=settings,
     )
+    crm_fetch_client = build_default_crm_fetch_client(settings)
+    crm_reader = CRMReader(memory_store=memory_store, fetch_client=crm_fetch_client)
+    feature_router.register("crm.activity_logged", crm_reader.handle_data_sync)
 
     app.state.feature_router = feature_router
     app.state.agent_backend = agent_backend
@@ -91,6 +96,8 @@ async def lifespan(app: FastAPI):
     app.state.memory_summarizer = memory_summarizer
     app.state.ingestion_provider = ingestion_provider
     app.state.ingestion_pipeline = ingestion_pipeline
+    app.state.crm_fetch_client = crm_fetch_client
+    app.state.crm_reader = crm_reader
 
     scheduler.add_interval_job(
         heartbeat,
@@ -104,10 +111,13 @@ async def lifespan(app: FastAPI):
     finally:
         log.info("runtime.stopping")
         await scheduler.shutdown()
-        # Close the ingestion provider if it owns network resources.
-        close = getattr(ingestion_provider, "close", None)
-        if close is not None:
-            await close()
+        # Close any providers / clients that own network resources.
+        for closer in (
+            getattr(ingestion_provider, "close", None),
+            getattr(crm_fetch_client, "close", None),
+        ):
+            if closer is not None:
+                await closer()
         await dispose_engine()
 
 

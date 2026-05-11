@@ -94,6 +94,13 @@ class Settings(BaseSettings):
     ingestion_default_since_days: int = 90
     ingestion_recording_cap: int = 5
 
+    # WO #9 — CRMReader / on-demand CRM fetch via Pipedream `crm_fetch`.
+    # The CRMReader uses ``stub`` by default for dev (returns no record
+    # on cache miss so the test harness can decide). ``pipedream`` POSTs
+    # to the configured workflow URL.
+    crm_fetch_provider: str = "stub"
+    alex_pipedream_crm_fetch_url: str = ""
+
     @property
     def has_real_embedding_client(self) -> bool:
         return bool(self.openai_api_key)
