@@ -23,7 +23,17 @@ from .routes.events import router as events_router
 from .routes.health import router as health_router
 from .routes.ingestion import router as ingestion_router
 from .services.agent_backend import build_default_backend
+from .services.approval_expiry_scan import (
+    APPROVAL_EXPIRY_SCAN_INTERVAL_SECONDS,
+    ApprovalExpiryScan,
+    build_expiry_scan_job,
+)
+from .services.approval_gate import ApprovalGate
 from .services.approval_handler import ApprovalHandler
+from .services.approved_action_dispatcher import (
+    ApprovedActionDispatcher,
+    attach_dispatcher,
+)
 from .services.crm_fetch_client import build_default_crm_fetch_client
 from .services.crm_reader import CRMReader
 from .services.crm_validator import CRMValidator
@@ -73,9 +83,11 @@ async def lifespan(app: FastAPI):
     feature_router = FeatureRouter()
     agent_backend = build_default_backend(settings)
     event_processor = EventProcessor(feature_router)
-    approval_handler = ApprovalHandler()
     scheduler = SchedulerService()
     event_bus = EventBus()
+    approval_gate = ApprovalGate(event_bus=event_bus)
+    approval_handler = ApprovalHandler(event_bus=event_bus)
+    approval_expiry_scan = ApprovalExpiryScan(event_bus=event_bus)
     embedding_client = build_default_embedding_client(settings)
     memory_store = MemoryStore(embedding_client=embedding_client, settings=settings)
     memory_summarizer = MemorySummarizer(
@@ -97,6 +109,11 @@ async def lifespan(app: FastAPI):
     crm_validator = CRMValidator()
     crm_write_client = build_default_crm_write_client(settings)
     crm_writer = CRMWriter(write_client=crm_write_client, event_bus=event_bus)
+    approved_action_dispatcher = ApprovedActionDispatcher(
+        crm_writer=crm_writer,
+        crm_validator=crm_validator,
+    )
+    attach_dispatcher(bus=event_bus, dispatcher=approved_action_dispatcher)
     meeting_emitter = MeetingEventEmitter(event_bus)
     meeting_classifier = MeetingClassifier(
         memory_store=memory_store,
@@ -124,6 +141,9 @@ async def lifespan(app: FastAPI):
     app.state.crm_validator = crm_validator
     app.state.crm_write_client = crm_write_client
     app.state.crm_writer = crm_writer
+    app.state.approval_gate = approval_gate
+    app.state.approval_expiry_scan = approval_expiry_scan
+    app.state.approved_action_dispatcher = approved_action_dispatcher
     app.state.meeting_emitter = meeting_emitter
     app.state.meeting_classifier = meeting_classifier
     app.state.meeting_completion_scan = meeting_completion_scan
@@ -137,6 +157,11 @@ async def lifespan(app: FastAPI):
         build_completion_scan_job(meeting_completion_scan),
         seconds=MEETING_COMPLETION_SCAN_INTERVAL_SECONDS,
         job_id="meeting_completion_scan",
+    )
+    scheduler.add_interval_job(
+        build_expiry_scan_job(approval_expiry_scan),
+        seconds=APPROVAL_EXPIRY_SCAN_INTERVAL_SECONDS,
+        job_id="approval_expiry_scan",
     )
     scheduler.start()
 

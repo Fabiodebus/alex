@@ -53,7 +53,7 @@ async def test_callbacks_approve_transitions_to_completed(client, tenant, rep):
             audit = await session.scalar(
                 text(
                     "SELECT count(*) FROM audit_log "
-                    "WHERE action_type = 'approval.approve' "
+                    "WHERE action_type = 'approval.approved' "
                     "AND target_id = :id"
                 ),
                 {"id": str(task_id)},

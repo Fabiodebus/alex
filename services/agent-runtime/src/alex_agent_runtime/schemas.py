@@ -700,3 +700,115 @@ class CalendarLifecycleState(StrEnum):
     DETECTED = "detected"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# WO #12 — Approval Workflow
+# ---------------------------------------------------------------------------
+class PendingTaskStatus(StrEnum):
+    """Subset of task_state.status that this WO operates on."""
+
+    AWAITING_APPROVAL = "awaiting_approval"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+class ApprovalOutcome(StrEnum):
+    """Terminal outcomes recorded by ApprovalHandler / ApprovalExpiryScan."""
+
+    APPROVED = "approved"
+    EDITED = "edited"
+    DISCARDED = "discarded"
+    EXPIRED = "expired"
+
+
+class PendingTaskCreate(BaseModel):
+    """Input to :meth:`ApprovalGate.create_pending_task`.
+
+    The ``task_type`` is the dotted action kind the rep is being asked
+    to approve (``crm.write``, ``email.send``, …). ``payload`` carries
+    the full proposed action so the audit log + downstream dispatcher
+    can replay it once approved.
+    """
+
+    tenant_id: UUID
+    rep_id: UUID
+    task_type: str = Field(min_length=1)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    title: str | None = None
+    expires_in_hours: int = Field(default=24, ge=1, le=24 * 14)
+    parent_task_id: UUID | None = None
+
+
+class PendingTask(BaseModel):
+    """Read model returned by :class:`ApprovalGate`."""
+
+    task_id: UUID
+    tenant_id: UUID
+    assignee_rep_id: UUID
+    task_type: str
+    status: PendingTaskStatus
+    payload: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] | None = None
+    deadline: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
+class ApprovalRequested(BaseModel):
+    """Published by ApprovalGate after a PendingTask lands; consumed by
+    Notification Delivery (WO #13) to fan out an approval card."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    task_id: UUID
+    task_type: str
+    title: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    deadline: datetime
+
+
+class EditDiff(BaseModel):
+    """Captured when a rep approves with edits.
+
+    VoiceUpdater (WO #14, Voice Model) subscribes so the rep's editing
+    patterns feed the per-rep voice training loop.
+    """
+
+    tenant_id: UUID
+    rep_id: UUID
+    task_id: UUID
+    task_type: str
+    before: dict[str, Any] = Field(default_factory=dict)
+    after: dict[str, Any] = Field(default_factory=dict)
+
+
+class TaskApproved(BaseModel):
+    """Published on ``approval.approved`` after the audit row is written.
+
+    The ApprovedActionDispatcher subscribes and routes by ``task_type``
+    to the concrete executor (CRMWriter, future EmailDispatcher, …)."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    task_id: UUID
+    task_type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    edit_diff: EditDiff | None = None
+
+
+class TaskDiscarded(BaseModel):
+    tenant_id: UUID
+    rep_id: UUID
+    task_id: UUID
+    task_type: str
+    feedback: str | None = None
+
+
+class TaskExpired(BaseModel):
+    tenant_id: UUID
+    rep_id: UUID
+    task_id: UUID
+    task_type: str
+    deadline: datetime
