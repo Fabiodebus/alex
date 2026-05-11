@@ -7,6 +7,7 @@ data-layer migration; this writer just inserts rows.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import structlog
@@ -127,5 +128,16 @@ class EmbeddingIndexer:
 
 
 def _vector_literal(vector: list[float]) -> str:
-    """Format a Python list as the pgvector text input '[x, y, z, ...]'."""
+    """Format a Python list as the pgvector text input '[x, y, z, ...]'.
+
+    Validates that every element is finite — pgvector rejects ``NaN`` /
+    ``Inf`` at cast time with a generic error that would roll the
+    surrounding write transaction back, so we surface it explicitly
+    instead of letting a bad embedding silently abort a memory write.
+    """
+    for value in vector:
+        if not math.isfinite(value):
+            raise ValueError(
+                f"vector contains non-finite value ({value}); refusing to write"
+            )
     return "[" + ",".join(format(v, ".7g") for v in vector) + "]"

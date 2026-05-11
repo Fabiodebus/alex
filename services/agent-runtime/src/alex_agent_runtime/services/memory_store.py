@@ -59,13 +59,40 @@ _TIER_TABLES: dict[MemoryTier, dict[str, str]] = {
     },
 }
 
+_OWNER_REQUIRED_TIERS: frozenset[MemoryTier] = frozenset(
+    {MemoryTier.REP, MemoryTier.DEAL, MemoryTier.ACCOUNT}
+)
+
 
 class MemoryStoreError(RuntimeError):
     pass
 
 
-def _content_hash(content: str) -> str:
-    return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+def _content_hash(kind: str, content: str) -> str:
+    """Hash includes ``kind`` so the same physical text used for different
+    purposes (e.g. as ``voice_sample`` vs ``interaction_note``) stays as
+    two distinct memory rows. Without this distinction, callers using
+    ``kinds_filter`` would see surprising results."""
+    payload = f"{kind}\n{content.strip()}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _is_truthy_share_value(value: Any) -> bool:
+    """Strict parser for the ``tenant_config.org_share_rep_memories``
+    value. Plain ``bool(value)`` is wrong: a stored ``"false"`` string
+    (in JSON or as a raw cell) would evaluate ``True``. We accept only
+    the explicit truthy spellings."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "on", "enabled"}
+    if isinstance(value, dict):
+        return _is_truthy_share_value(value.get("enabled", False))
+    return False
 
 
 def _coerce_jsonb(value: dict[str, Any]) -> str:
@@ -95,8 +122,15 @@ class MemoryStore:
         write: MemoryWrite,
         index_embeddings: bool = True,
     ) -> MemoryRecord:
-        """Insert a memory row (deduping by content hash for the same owner)
-        and optionally compute + persist embeddings for the content.
+        """Insert (or recover-the-existing) memory row and optionally
+        embed its content.
+
+        The dedup key is ``(tenant_id, owner_id, sha256(kind + content))``
+        — enforced both in the application (this method) and by the
+        unique partial index added in migration ``0005``. We ``INSERT ...
+        ON CONFLICT DO NOTHING`` and re-fetch the conflicting row on
+        miss; that closes the race the previous SELECT-then-INSERT
+        version had at READ COMMITTED.
         """
         meta = _TIER_TABLES[write.tier]
         memory_table = meta["memory_table"]
@@ -110,19 +144,42 @@ class MemoryStore:
                 f"{write.tier.value}-tier writes require owner_id"
             )
 
+        # Always overwrite any caller-supplied content_hash — the dedup
+        # key must derive from the actual content + kind, not from
+        # whatever attributes the caller passed in.
         attributes = dict(write.attributes)
-        attributes.setdefault("content_hash", _content_hash(write.content))
+        attributes["content_hash"] = _content_hash(write.kind, write.content)
 
         with tenant_scope(tenant_id):
             async with transactional_session() as session:
-                existing = await self._find_by_content_hash(
-                    session,
-                    memory_table=memory_table,
-                    owner_column=owner_column,
-                    owner_id=write.owner_id,
-                    content_hash=attributes["content_hash"],
+                row = await session.execute(
+                    text(self._insert_sql(memory_table, owner_column)),
+                    {
+                        "owner_id": str(write.owner_id) if write.owner_id else None,
+                        "kind": write.kind,
+                        "content": write.content,
+                        "attributes": _coerce_jsonb(attributes),
+                        "source_uri": write.source_uri,
+                    },
                 )
-                if existing is not None:
+                inserted = row.one_or_none()
+                if inserted is None:
+                    # Conflict → the row already exists; fetch it.
+                    existing = await self._find_by_content_hash(
+                        session,
+                        memory_table=memory_table,
+                        owner_column=owner_column,
+                        owner_id=write.owner_id,
+                        content_hash=attributes["content_hash"],
+                    )
+                    if existing is None:
+                        # The conflict target matched but the row is
+                        # invisible (soft-deleted with the same hash and
+                        # the partial index didn't see it, or RLS hid
+                        # it). Surface this rather than returning None.
+                        raise MemoryStoreError(
+                            f"INSERT conflict on {memory_table} but no matching row found"
+                        )
                     log.info(
                         "memory_store.dedup",
                         tier=write.tier.value,
@@ -139,17 +196,6 @@ class MemoryStore:
                         )
                     return existing
 
-                row = await session.execute(
-                    text(self._insert_sql(memory_table, owner_column)),
-                    {
-                        "owner_id": str(write.owner_id) if write.owner_id else None,
-                        "kind": write.kind,
-                        "content": write.content,
-                        "attributes": _coerce_jsonb(attributes),
-                        "source_uri": write.source_uri,
-                    },
-                )
-                inserted = row.one()
                 record = self._row_to_record(write.tier, inserted, owner_column=owner_column)
 
                 if index_embeddings:
@@ -182,6 +228,19 @@ class MemoryStore:
         limit: int = 20,
         kinds_filter: Sequence[str] | None = None,
     ) -> list[MemoryRecord]:
+        """Most-recent memory rows for the given scope.
+
+        Rep / deal / account tiers require an explicit ``owner_id`` —
+        omitting it would silently expose every owner's memory inside
+        the tenant. Callers that genuinely want a cross-owner scan must
+        do it through ``retrieve()`` with the appropriate
+        ``MemoryContext``.
+        """
+        if tier in _OWNER_REQUIRED_TIERS and owner_id is None:
+            raise MemoryStoreError(
+                f"{tier.value}-tier list_recent requires owner_id"
+            )
+
         meta = _TIER_TABLES[tier]
         memory_table = meta["memory_table"]
         owner_column = meta["owner_column"]
@@ -205,11 +264,23 @@ class MemoryStore:
             deal_id=context.deal_id,
             account_id=context.account_id,
         )
+
+        # Compute the query vector at most once; reuse across tiers.
+        query_vector: list[float] | None = None
+        if context.query_text:
+            embeddings = await self._embedding_client.embed([context.query_text])
+            query_vector = embeddings[0]
+
         for tier in context.tiers:
             owner_id = self._owner_for_tier(context, tier)
             # Rep tier under org sharing: drop the per-rep filter so every
             # rep's memory inside the tenant is in scope.
             if tier is MemoryTier.REP and share_rep_memories_across_org:
+                if context.rep_id is None:
+                    log.warning(
+                        "memory_store.retrieve.org_share_without_rep",
+                        tenant_id=str(context.tenant_id),
+                    )
                 owner_id = None
             # Deal / account tiers require an explicit id from the context;
             # there's no "all deals" view at this layer.
@@ -228,7 +299,7 @@ class MemoryStore:
                 tenant_id=context.tenant_id,
                 tier=tier,
                 owner_id=owner_id,
-                query_text=context.query_text,
+                query_vector=query_vector,
                 kinds_filter=context.kinds_filter,
                 k=context.k_per_tier,
                 isolate_rep=isolate_rep,
@@ -246,7 +317,7 @@ class MemoryStore:
         tenant_id: UUID,
         tier: MemoryTier,
         owner_id: UUID | None,
-        query_text: str | None,
+        query_vector: list[float] | None,
         kinds_filter: Sequence[str] | None,
         k: int,
         isolate_rep: bool,
@@ -258,7 +329,7 @@ class MemoryStore:
         owner_column = meta["owner_column"]
 
         params: dict[str, Any] = {"k": k}
-        where_clauses: list[str] = [f"m.deleted_at IS NULL"]
+        where_clauses: list[str] = ["m.deleted_at IS NULL"]
         if owner_column is not None and owner_id is not None:
             where_clauses.append(f"m.{owner_column} = :owner_id")
             params["owner_id"] = str(owner_id)
@@ -273,9 +344,8 @@ class MemoryStore:
 
         with tenant_scope(tenant_id):
             async with transactional_session() as session:
-                if query_text:
-                    vectors = await self._embedding_client.embed([query_text])
-                    params["vec"] = _vector_literal(vectors[0])
+                if query_vector is not None:
+                    params["vec"] = _vector_literal(query_vector)
                     sql = (
                         f"SELECT m.id, m.tenant_id, "
                         f"{('m.' + owner_column) if owner_column else 'NULL::uuid'} AS owner_id, "
@@ -336,9 +406,7 @@ class MemoryStore:
                 value = row.scalar_one_or_none()
         if value is None:
             return self._settings.default_share_rep_memories_across_org
-        if isinstance(value, dict):
-            return bool(value.get("enabled", False))
-        return bool(value)
+        return _is_truthy_share_value(value)
 
     async def _find_by_content_hash(
         self,
@@ -367,7 +435,6 @@ class MemoryStore:
         r = row.one_or_none()
         if r is None:
             return None
-        # Determine tier from table name (single-purpose lookup).
         tier = next(t for t, meta in _TIER_TABLES.items() if meta["memory_table"] == memory_table)
         return MemoryRecord(
             id=r.id,
@@ -384,12 +451,21 @@ class MemoryStore:
 
     @staticmethod
     def _insert_sql(memory_table: str, owner_column: str | None) -> str:
+        """``INSERT ... ON CONFLICT DO NOTHING RETURNING ...``.
+
+        The conflict target is implicit — Postgres matches against any
+        applicable unique index (the partial unique indexes from
+        migration 0005 cover the dedup keys per tier). Returns no row
+        when the insert was skipped; the caller then fetches the
+        existing row.
+        """
         if owner_column is None:
             return (
                 f"INSERT INTO {memory_table} "
                 f"(tenant_id, kind, content, attributes, source_uri) "
                 f"VALUES (current_setting('app.tenant_id')::uuid, :kind, :content, "
                 f"CAST(:attributes AS jsonb), :source_uri) "
+                f"ON CONFLICT DO NOTHING "
                 f"RETURNING id, tenant_id, NULL::uuid AS owner_id, kind, content, "
                 f"attributes, source_uri, created_at, updated_at"
             )
@@ -398,6 +474,7 @@ class MemoryStore:
             f"(tenant_id, {owner_column}, kind, content, attributes, source_uri) "
             f"VALUES (current_setting('app.tenant_id')::uuid, :owner_id, :kind, :content, "
             f"CAST(:attributes AS jsonb), :source_uri) "
+            f"ON CONFLICT DO NOTHING "
             f"RETURNING id, tenant_id, {owner_column} AS owner_id, kind, content, "
             f"attributes, source_uri, created_at, updated_at"
         )
