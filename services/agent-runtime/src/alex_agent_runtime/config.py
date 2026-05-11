@@ -56,6 +56,26 @@ class Settings(BaseSettings):
     # asked to dispatch without it.
     pipedream_base_url: str = ""
 
+    # Embedding pipeline (WO #7). Dimension matches the data layer's
+    # `*_embeddings.content_vector` column. Leave OPENAI_API_KEY empty in
+    # dev — EmbeddingIndexer falls back to StubEmbeddingClient.
+    openai_api_key: str = ""
+    openai_base_url: str = ""
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dim: int = 1536
+    embedding_chunk_chars: int = 1800
+    embedding_chunk_overlap: int = 200
+
+    # Default per-tenant policy when no explicit TenantConfig row applies:
+    # rep memory is rep-private. The MemoryStore reads the
+    # `org_share_rep_memories` flag from TenantConfig on each retrieve;
+    # this value is the fallback when the row is missing.
+    default_share_rep_memories_across_org: bool = False
+
+    @property
+    def has_real_embedding_client(self) -> bool:
+        return bool(self.openai_api_key)
+
     @property
     def has_real_agent_backend(self) -> bool:
         return bool(self.anthropic_api_key)

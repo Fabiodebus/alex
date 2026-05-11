@@ -18,6 +18,7 @@ dependencies = [
     "pydantic-settings>=2.4,<3",
     "claude-agent-sdk>=0.1.0,<1",
     "anthropic>=0.39,<1",
+    "openai>=1.40,<2",
     "apscheduler>=3.10,<4",
     "structlog>=24.1,<25",
     "python-dotenv>=1.0,<2",

@@ -164,3 +164,95 @@ class AuditLogEntry(BaseModel):
     prompt: dict[str, Any] | None = None
     output: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Persistent Memory (WO #7)
+# ---------------------------------------------------------------------------
+class MemoryTier(StrEnum):
+    REP = "rep"
+    DEAL = "deal"
+    ACCOUNT = "account"
+    ORG = "org"
+
+
+class MemoryRecord(BaseModel):
+    """Read model returned for individual memory rows."""
+
+    id: UUID
+    tier: MemoryTier
+    tenant_id: UUID
+    owner_id: UUID | None = Field(
+        default=None,
+        description=(
+            "rep_id / deal_id / account_id depending on tier. Null for org-tier "
+            "memories which scope to the tenant directly."
+        ),
+    )
+    kind: str
+    content: str
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    source_uri: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MemoryWrite(BaseModel):
+    """Input to MemoryStore writes."""
+
+    tier: MemoryTier
+    owner_id: UUID | None = None  # rep_id / deal_id / account_id; null for org
+    kind: str
+    content: str
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    source_uri: str | None = None
+
+
+class MemoryContext(BaseModel):
+    """Input to MemoryStore.retrieve().
+
+    Identifies the scope (tenant + which rep / deal / account is in focus)
+    and optionally a natural-language query for semantic retrieval. When
+    ``query_text`` is set the retrieval layer runs an ANN search over
+    each tier's embedding table and joins back to the structured rows;
+    without a query it returns the most recent records per requested tier.
+    """
+
+    tenant_id: UUID
+    rep_id: UUID | None = None
+    deal_id: UUID | None = None
+    account_id: UUID | None = None
+    tiers: list[MemoryTier] = Field(
+        default_factory=lambda: [
+            MemoryTier.REP,
+            MemoryTier.DEAL,
+            MemoryTier.ACCOUNT,
+            MemoryTier.ORG,
+        ]
+    )
+    query_text: str | None = None
+    kinds_filter: list[str] | None = None
+    k_per_tier: int = Field(default=5, ge=1, le=50)
+
+
+class MemorySnippet(BaseModel):
+    """A single semantically-retrieved chunk with its parent memory row."""
+
+    memory: MemoryRecord
+    chunk_text: str
+    similarity: float | None = None
+
+
+class MemorySummary(BaseModel):
+    """Output of MemoryStore.retrieve()."""
+
+    tenant_id: UUID
+    rep_id: UUID | None = None
+    deal_id: UUID | None = None
+    account_id: UUID | None = None
+    by_tier: dict[MemoryTier, list[MemorySnippet]] = Field(default_factory=dict)
+
+
+class EmbeddingChunk(BaseModel):
+    text: str
+    chunk_index: int
