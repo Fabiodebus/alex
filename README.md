@@ -9,10 +9,10 @@ This is a monorepo. Each service lives under `services/`.
 | Path | Description |
 | --- | --- |
 | `services/data-layer/` | PostgreSQL + pgvector schema and Alembic migrations (WO #1). |
-| `services/agent-runtime/` | Agent runtime built on the Claude Agent SDK (WO #2 — not yet implemented). |
+| `services/agent-runtime/` | Agent runtime built on the Claude Agent SDK — FastAPI service, AgentBackend abstraction, scheduler, audit log, HMAC-signed webhook surface (WO #2). |
 | `services/pipedream/` | Pipedream integration layer — inbound workflows (WO #3) and outbound execution + OAuth relay (WO #4). |
 | `services/slack-bot/` | Slack messaging surface — Block Kit rendering of `AgentOutput`, interactive approvals, OAuth callback (WO #5). |
-| `services/teams-bot/` | Microsoft Teams messaging surface (WO #6 — not yet implemented). |
+| `services/teams-bot/` | Microsoft Teams messaging surface — Adaptive Card rendering of `AgentOutput`, interactive approvals, OAuth callback (WO #6). |
 
 ## Local development
 
@@ -32,4 +32,4 @@ Then run service-specific commands from each `services/<name>/` directory. See `
 - [x] WO #3 — Pipedream Integration Layer: Inbound Event Workflows
 - [x] WO #4 — Pipedream Integration Layer: Action Execution & OAuth Relay
 - [x] WO #5 — Messaging Surface: Slack App
-- [ ] WO #6 — Messaging Surface: Teams Bot
+- [x] WO #6 — Messaging Surface: Teams Bot
