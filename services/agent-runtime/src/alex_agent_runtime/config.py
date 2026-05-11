@@ -142,6 +142,19 @@ class Settings(BaseSettings):
     activation_proactive_window_hours: int = 24
     activation_scan_interval_seconds: int = 30 * 60  # 30 min
 
+    # WO #17 / #18 / #19 — Proactive composer connectors.
+    transcript_fetch_provider: str = "stub"
+    alex_pipedream_transcript_fetch_url: str = ""
+    email_send_provider: str = "stub"
+    alex_pipedream_email_send_url: str = ""
+    # Brief scan cadence. Hourly is enough to catch normal calendar
+    # patterns; the trade-off is meetings created < 60 min before start
+    # might miss their on-time brief. Drop to 300 s if that becomes a
+    # problem in production.
+    meeting_brief_scan_interval_seconds: int = 60 * 60
+    # Lookahead window for which meetings the brief scan considers.
+    meeting_brief_lookahead_hours: int = 25
+
     @property
     def has_real_embedding_client(self) -> bool:
         return bool(self.openai_api_key)

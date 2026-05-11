@@ -1169,3 +1169,126 @@ class ActivationMilestone(BaseModel):
     rep_id: UUID
     task_id: UUID
     achieved_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# WO #17 / #18 / #19 — Proactive feature composers
+# ---------------------------------------------------------------------------
+class TranscriptRequest(BaseModel):
+    tenant_id: UUID
+    rep_id: UUID
+    calendar_event_id: str
+    provider_hint: str | None = Field(
+        default=None,
+        description="Optional recording-tool name (krisp / granola / fathom). "
+        "When omitted, Pipedream picks the rep's primary connected tool.",
+    )
+
+
+class TranscriptResult(BaseModel):
+    calendar_event_id: str
+    provider: str
+    transcript: str
+    language: VoiceLanguage = VoiceLanguage.EN
+    speakers: list[str] = Field(default_factory=list)
+    fetched_at: datetime
+
+
+class EmailSendRequest(BaseModel):
+    tenant_id: UUID
+    rep_id: UUID
+    task_id: UUID | None = None
+    to: list[str] = Field(min_length=1)
+    cc: list[str] = Field(default_factory=list)
+    bcc: list[str] = Field(default_factory=list)
+    subject: str
+    body: str
+    in_reply_to: str | None = None
+    idempotency_key: str = Field(min_length=1)
+
+
+class EmailSendResult(BaseModel):
+    delivered: bool
+    provider: str
+    provider_message_id: str | None = None
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class MeetingBrief(BaseModel):
+    """Structured payload behind a meeting-prep AgentOutput.
+
+    Composer stuffs this into the PendingTask payload so the rep card +
+    audit trail keep the same shape, even after edits."""
+
+    title: str
+    account_context: str
+    attendee_profiles: list[dict[str, Any]] = Field(default_factory=list)
+    last_touch_summary: str | None = None
+    open_commitments: list[str] = Field(default_factory=list)
+    talking_points: list[str] = Field(default_factory=list)
+    recommended_cta: str | None = None
+    meddic_gaps: list[str] = Field(default_factory=list)
+    flagged_unknown_attendees: list[str] = Field(default_factory=list)
+    opportunity_external_id: str | None = None
+    account_external_id: str | None = None
+
+
+class FollowUpDraft(BaseModel):
+    """Structured payload behind a follow-up draft AgentOutput."""
+
+    subject: str
+    body: str
+    to: list[str] = Field(default_factory=list)
+    cc: list[str] = Field(default_factory=list)
+    language: VoiceLanguage = VoiceLanguage.EN
+    de_register: GermanRegister | None = None
+    voice_application: VoiceApplication | None = None
+    used_transcript: bool = True
+    multi_company_pending: bool = False
+    candidate_recipient_groups: list[list[str]] = Field(default_factory=list)
+
+
+class CRMNoteReview(BaseModel):
+    """Composite payload assembled by CRMNoteComposer.
+
+    Contains both the free-text note and the per-field updates, plus
+    optional MEDDIC mappings. Wrapped into a single ``crm.write``
+    PendingTask so the rep approves the whole review package; the
+    ApprovedActionDispatcher routes it to CRMWriter."""
+
+    summary: str
+    key_points: list[str] = Field(default_factory=list)
+    decisions: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
+    new_contacts: list[dict[str, Any]] = Field(default_factory=list)
+    stage_change_proposal: dict[str, Any] | None = None
+    field_updates: list[dict[str, Any]] = Field(default_factory=list)
+    meddic_mappings: list[dict[str, Any]] = Field(default_factory=list)
+    meddic_gaps: list[str] = Field(default_factory=list)
+    note_body: str
+    crm_platform: CRMPlatform
+    crm_kind: CRMRecordKind
+    crm_external_id: str
+
+
+class ProactiveOutputKind(StrEnum):
+    """Topics published by composers on the EventBus."""
+
+    BRIEF_GENERATED = "meeting_brief.generated"
+    FOLLOW_UP_GENERATED = "follow_up.generated"
+    CRM_NOTE_GENERATED = "crm_note.generated"
+
+
+class FeedbackEvent(BaseModel):
+    """Inline thumbs up/down on a generated output.
+
+    Used by WO #17 (brief feedback) and any future feature. The slack-
+    bot already forwards `action='feedback'` callbacks today; this
+    schema is the runtime-side normalisation."""
+
+    tenant_id: UUID
+    rep_id: UUID
+    output_id: str
+    task_id: UUID | None = None
+    rating: int = Field(ge=-1, le=1)
+    note: str | None = None

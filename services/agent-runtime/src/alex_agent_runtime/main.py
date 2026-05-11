@@ -60,6 +60,20 @@ from .services.oauth_orchestrator import OAuthOrchestrator
 from .services.oauth_provider import build_default_oauth_provider
 from .services.onboarding_conversation import OnboardingConversationFlow
 from .services.onboarding_state_repo import OnboardingStateRepo
+from .services.crm_note_composer import CRMNoteComposer
+from .services.email_send_client import build_default_email_send_client
+from .services.follow_up_draft_composer import FollowUpDraftComposer
+from .services.meeting_brief_composer import MeetingBriefComposer
+from .services.meeting_brief_scan import (
+    MeetingBriefScan,
+    build_meeting_brief_scan_job,
+)
+from .services.meeting_events import (
+    TOPIC_MEETING_COMPLETED,
+    TOPIC_MEETING_DETECTED,
+)
+from .services.tenant_flags import TenantFlagRepo
+from .services.transcript_fetcher import build_default_transcript_fetcher
 from .services.voice_applicator import VoiceApplicator
 from .services.voice_profile_store import VoiceProfileStore
 from .services.voice_signal_extractor import VoiceSignalExtractor
@@ -134,9 +148,11 @@ async def lifespan(app: FastAPI):
     crm_validator = CRMValidator()
     crm_write_client = build_default_crm_write_client(settings)
     crm_writer = CRMWriter(write_client=crm_write_client, event_bus=event_bus)
+    email_send_client = build_default_email_send_client(settings)
     approved_action_dispatcher = ApprovedActionDispatcher(
         crm_writer=crm_writer,
         crm_validator=crm_validator,
+        email_send_client=email_send_client,
     )
     attach_dispatcher(bus=event_bus, dispatcher=approved_action_dispatcher)
     delivery_preferences = DeliveryPreferenceRepo()
@@ -180,6 +196,48 @@ async def lifespan(app: FastAPI):
         settings=settings,
     )
     attach_activation_tracker(bus=event_bus, tracker=activation_tracker)
+    tenant_flags = TenantFlagRepo()
+    transcript_fetcher = build_default_transcript_fetcher(settings)
+    meeting_brief_composer = MeetingBriefComposer(
+        agent_backend=agent_backend,
+        memory_store=memory_store,
+        crm_reader=crm_reader,
+        output_router=output_router,
+        tenant_flags=tenant_flags,
+        settings=settings,
+    )
+    event_bus.subscribe(
+        TOPIC_MEETING_DETECTED, meeting_brief_composer.handle_meeting_detected
+    )
+    meeting_brief_scan = MeetingBriefScan(
+        memory_store=memory_store,
+        composer=meeting_brief_composer,
+        settings=settings,
+    )
+    follow_up_draft_composer = FollowUpDraftComposer(
+        agent_backend=agent_backend,
+        memory_store=memory_store,
+        transcript_fetcher=transcript_fetcher,
+        voice_applicator=voice_applicator,
+        approval_gate=approval_gate,
+        output_router=output_router,
+    )
+    crm_note_composer = CRMNoteComposer(
+        agent_backend=agent_backend,
+        memory_store=memory_store,
+        crm_reader=crm_reader,
+        crm_validator=crm_validator,
+        approval_gate=approval_gate,
+        output_router=output_router,
+        transcript_fetcher=transcript_fetcher,
+        tenant_flags=tenant_flags,
+    )
+    event_bus.subscribe(
+        TOPIC_MEETING_COMPLETED, follow_up_draft_composer.handle_meeting_completed
+    )
+    event_bus.subscribe(
+        TOPIC_MEETING_COMPLETED, crm_note_composer.handle_meeting_completed
+    )
     meeting_emitter = MeetingEventEmitter(event_bus)
     meeting_classifier = MeetingClassifier(
         memory_store=memory_store,
@@ -223,6 +281,13 @@ async def lifespan(app: FastAPI):
     app.state.oauth_orchestrator = oauth_orchestrator
     app.state.onboarding_flow = onboarding_flow
     app.state.activation_tracker = activation_tracker
+    app.state.tenant_flags = tenant_flags
+    app.state.transcript_fetcher = transcript_fetcher
+    app.state.email_send_client = email_send_client
+    app.state.meeting_brief_composer = meeting_brief_composer
+    app.state.meeting_brief_scan = meeting_brief_scan
+    app.state.follow_up_draft_composer = follow_up_draft_composer
+    app.state.crm_note_composer = crm_note_composer
     app.state.meeting_emitter = meeting_emitter
     app.state.meeting_classifier = meeting_classifier
     app.state.meeting_completion_scan = meeting_completion_scan
@@ -252,6 +317,11 @@ async def lifespan(app: FastAPI):
         seconds=settings.activation_scan_interval_seconds,
         job_id="activation_fallback_scan",
     )
+    scheduler.add_interval_job(
+        build_meeting_brief_scan_job(meeting_brief_scan),
+        seconds=settings.meeting_brief_scan_interval_seconds,
+        job_id="meeting_brief_scan",
+    )
     scheduler.start()
 
     try:
@@ -266,6 +336,8 @@ async def lifespan(app: FastAPI):
             getattr(crm_write_client, "close", None),
             getattr(messaging_delivery_client, "close", None),
             getattr(oauth_provider, "close", None),
+            getattr(transcript_fetcher, "close", None),
+            getattr(email_send_client, "close", None),
         ):
             if closer is not None:
                 await closer()
