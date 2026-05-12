@@ -23,6 +23,9 @@ from .routes.events import router as events_router
 from .routes.health import router as health_router
 from .routes.ingestion import router as ingestion_router
 from .routes.onboarding import router as onboarding_router
+from .routes.pipedream_connect_webhooks import (
+    router as pipedream_connect_webhooks_router,
+)
 from .services.agent_backend import build_default_backend
 from .services.approval_expiry_scan import (
     APPROVAL_EXPIRY_SCAN_INTERVAL_SECONDS,
@@ -249,6 +252,7 @@ async def lifespan(app: FastAPI):
         emitter=meeting_emitter,
     )
 
+    app.state.settings = settings
     app.state.feature_router = feature_router
     app.state.agent_backend = agent_backend
     app.state.event_processor = event_processor
@@ -358,6 +362,7 @@ def create_app() -> FastAPI:
     app.include_router(connections_router)
     app.include_router(ingestion_router)
     app.include_router(onboarding_router)
+    app.include_router(pipedream_connect_webhooks_router)
     return app
 
 

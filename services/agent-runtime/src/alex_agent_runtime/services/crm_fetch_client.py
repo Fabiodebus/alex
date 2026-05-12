@@ -16,8 +16,17 @@ import httpx
 import structlog
 
 from ..config import Settings, get_settings
-from ..schemas import CRMFetchRequest, CRMPlatform, CRMRecord, CRMRecordKind
+from ..schemas import CRMFetchRequest, CRMPlatform, CRMRecord, CRMRecordKind, OnboardingConnector
+from .connect_account_resolver import (
+    ConnectAccountResolver,
+    DatabaseConnectAccountResolver,
+)
 from .pipedream_client import _sign
+from .pipedream_connect_client import (
+    PipedreamConnectClient,
+    PipedreamConnectError,
+    build_pipedream_connect_client,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -107,8 +116,139 @@ class PipedreamCRMFetchClient:
             ) from exc
 
 
+class PipedreamConnectCRMFetchClient:
+    """Fetch CRM records via Pipedream Connect proxy (WO #24).
+
+    Looks up the rep's Pipedream account_id for the requested platform,
+    constructs the upstream provider's REST URL (Close, HubSpot, …),
+    and asks Pipedream's Connect proxy to inject the rep's OAuth
+    credentials and forward.
+
+    Only Close is wired in v1 — the other CRM platforms fall back to
+    raising ``CRMFetchError`` until per-platform URL mapping lands.
+    """
+
+    name = "pipedream_connect"
+
+    # Close API base. Each ``kind`` maps to one endpoint segment.
+    _CLOSE_PATHS: dict[CRMRecordKind, str] = {
+        CRMRecordKind.OPPORTUNITY: "opportunity",
+        CRMRecordKind.CONTACT: "contact",
+        # Close models accounts as "leads".
+        CRMRecordKind.ACCOUNT: "lead",
+    }
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        connect_client: PipedreamConnectClient | None = None,
+        resolver: ConnectAccountResolver | None = None,
+    ) -> None:
+        self._settings = settings
+        owned = connect_client is None
+        if connect_client is None:
+            connect_client = build_pipedream_connect_client(settings)
+        if connect_client is None:
+            raise CRMFetchError(
+                "PipedreamConnectCRMFetchClient requires Connect credentials in Settings",
+                status=0,
+            )
+        self._client = connect_client
+        self._owned_client = owned
+        self._resolver = resolver or DatabaseConnectAccountResolver()
+
+    async def close(self) -> None:
+        if self._owned_client:
+            await self._client.close()
+
+    async def fetch(self, request: CRMFetchRequest) -> dict[str, object] | None:
+        connector = _connector_for_platform(request.platform)
+        if connector is None:
+            raise CRMFetchError(
+                f"Pipedream Connect fetch not yet wired for platform "
+                f"{request.platform.value}",
+                status=0,
+            )
+        account_id = await self._resolver.resolve(
+            tenant_id=request.tenant_id, connector=connector
+        )
+        if account_id is None:
+            log.warning(
+                "crm_fetch.pipedream_connect.no_account",
+                tenant_id=str(request.tenant_id),
+                platform=request.platform.value,
+            )
+            return None
+        url = self._url_for(platform=request.platform, kind=request.kind, external_id=request.external_id)
+        try:
+            envelope = await self._client.proxy_request(
+                external_user_id=f"tenant:{request.tenant_id}",  # any non-empty value; Pipedream ties the call to account_id
+                account_id=account_id,
+                url=url,
+                method="GET",
+            )
+        except PipedreamConnectError as exc:
+            if exc.status == 404:
+                return None
+            raise CRMFetchError(
+                f"Pipedream Connect proxy returned {exc.status}",
+                status=exc.status,
+                body=exc.body,
+            ) from exc
+        # Pipedream wraps the upstream response in ``{statusCode, body, headers}``.
+        status_code = envelope.get("statusCode") if isinstance(envelope, dict) else None
+        if status_code == 404:
+            return None
+        if isinstance(status_code, int) and status_code >= 400:
+            raise CRMFetchError(
+                f"Upstream {request.platform.value} returned {status_code} via Connect proxy",
+                status=status_code,
+                body=envelope,
+            )
+        body = envelope.get("body") if isinstance(envelope, dict) else None
+        if isinstance(body, str):
+            import json as _json
+
+            try:
+                body = _json.loads(body)
+            except ValueError:
+                return None
+        return body if isinstance(body, dict) else None
+
+    def _url_for(
+        self,
+        *,
+        platform: CRMPlatform,
+        kind: CRMRecordKind,
+        external_id: str,
+    ) -> str:
+        if platform is CRMPlatform.CLOSE:
+            path = self._CLOSE_PATHS.get(kind)
+            if path is None:
+                raise CRMFetchError(
+                    f"Close adapter has no URL mapping for kind {kind.value}",
+                    status=0,
+                )
+            return f"https://api.close.com/api/v1/{path}/{external_id}/"
+        # Other platforms wired later (WO #25+).
+        raise CRMFetchError(
+            f"Pipedream Connect URL builder not implemented for {platform.value}",
+            status=0,
+        )
+
+
+def _connector_for_platform(platform: CRMPlatform) -> OnboardingConnector | None:
+    return {
+        CRMPlatform.CLOSE: OnboardingConnector.CLOSE,
+    }.get(platform)
+
+
 def build_default_crm_fetch_client(settings: Settings | None = None) -> CRMFetchClient:
     s = settings or get_settings()
+    if s.crm_fetch_provider == "pipedream_connect":
+        log.info("crm_fetch_client.selected", provider="pipedream_connect")
+        return PipedreamConnectCRMFetchClient(s)
     if s.crm_fetch_provider == "pipedream":
         log.info("crm_fetch_client.selected", provider="pipedream")
         return PipedreamCRMFetchClient(s)

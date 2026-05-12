@@ -20,8 +20,15 @@ from .webhook_signing import (
 
 log = structlog.get_logger(__name__)
 
-# Routes that don't require tenant context (health checks, metrics).
+# Routes that don't require tenant context (health checks, metrics, and
+# webhooks where the tenant id is encoded in the payload itself).
 _TENANT_FREE_PATHS: frozenset[str] = frozenset({"/healthz", "/readyz", "/metrics"})
+
+# Path prefixes that don't require an X-Tenant-Id header — used by
+# inbound webhooks from external systems that authenticate via their own
+# signing scheme and embed the tenant in the body (e.g. Pipedream
+# Connect uses ``external_user_id``).
+_TENANT_FREE_PREFIXES: tuple[str, ...] = ("/webhooks/",)
 
 # Routes that require a signed body when the secret is configured. Health
 # probes and OpenAPI docs are excluded so they can be hit unauthenticated.
@@ -83,7 +90,9 @@ class TenantHeaderMiddleware(BaseHTTPMiddleware):
     """Read the configured tenant header, parse it as UUID, bind to contextvar."""
 
     async def dispatch(self, request: Request, call_next):
-        if request.url.path in _TENANT_FREE_PATHS:
+        if request.url.path in _TENANT_FREE_PATHS or any(
+            request.url.path.startswith(p) for p in _TENANT_FREE_PREFIXES
+        ):
             return await call_next(request)
 
         settings = get_settings()

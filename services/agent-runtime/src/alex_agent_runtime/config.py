@@ -126,14 +126,27 @@ class Settings(BaseSettings):
     voice_update_min_alpha: float = 0.05
     voice_update_decay: float = 1.0
 
-    # WO #15 / #16 — Onboarding. ``stub`` synthesises a successful OAuth
-    # round-trip so the Slack flow can be walked without real CRM
-    # credentials. ``pipedream`` points the orchestrator at per-connector
-    # workflow URLs that handle the real provider redirect.
+    # WO #15 / #16 / #24 — Onboarding OAuth.
+    # ``stub`` synthesises a successful round-trip (default for dev/tests).
+    # ``pipedream`` points the orchestrator at per-connector workflow URLs
+    # that wrap our own OAuth client (legacy path, kept for back-compat).
+    # ``pipedream_connect`` uses Pipedream Connect — Pipedream owns the
+    # OAuth client, we hold a Pipedream account_id per rep/connector.
     oauth_provider: str = "stub"
     alex_pipedream_oauth_close_url: str = ""
     alex_pipedream_oauth_google_url: str = ""
     alex_pipedream_oauth_krisp_url: str = ""
+    # WO #24 — Pipedream Connect API.
+    alex_pipedream_connect_project_id: str = ""
+    alex_pipedream_connect_client_id: str = ""
+    alex_pipedream_connect_client_secret: str = ""
+    alex_pipedream_connect_api_base: str = "https://api.pipedream.com/v1"
+    # Pipedream environment to hit on Connect API calls — "production" or
+    # "development". Mirrors the toggle in their dashboard.
+    alex_pipedream_connect_environment: str = "production"
+    # Shared secret Pipedream signs webhook payloads with (set after
+    # registering the webhook URL in the dashboard).
+    alex_pipedream_connect_webhook_secret: str = ""
     # Public URL of the runtime — used by StubOAuthProvider to build the
     # short-circuit "authorize" URL it points the Slack bot at. Leave
     # empty in tests; the orchestrator falls back to the relative URL.

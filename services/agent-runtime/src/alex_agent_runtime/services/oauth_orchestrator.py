@@ -203,3 +203,90 @@ class OAuthOrchestrator:
             connector=connector,
             status=ConnectorConnectionStatus.SKIPPED,
         )
+
+    async def complete_via_pipedream_connect(
+        self,
+        *,
+        tenant_id: UUID,
+        rep_id: UUID,
+        connector: OnboardingConnector,
+        account_id: str,
+        app_slug: str,
+        is_primary_slug: bool,
+    ) -> OAuthCompletion | None:
+        """Webhook-driven completion path (WO #24 Pipedream Connect).
+
+        For the connector's **primary** slug (e.g. ``gmail`` for Google,
+        ``close`` for Close) this advances the rep's onboarding state to
+        CONNECTED with ``token_ref="pdc://<account_id>"`` — same shape
+        as the callback flow. For a follow-up slug (e.g.
+        ``google_calendar`` after Gmail) we don't touch onboarding
+        state; the account is queryable via Pipedream's API when the
+        Calendar ingestion service needs it. The follow-up case returns
+        ``None`` so the caller knows there's nothing further to do.
+        """
+        if not is_primary_slug:
+            log.info(
+                "oauth_orchestrator.pdc.follow_up_account_recorded",
+                connector=connector.value,
+                rep_id=str(rep_id),
+                app_slug=app_slug,
+                account_id=account_id,
+            )
+            return None
+
+        token_ref = f"pdc://{account_id}"
+        with tenant_scope(tenant_id):
+            await self._state_repo.update_connector(
+                tenant_id=tenant_id,
+                rep_id=rep_id,
+                connector=connector,
+                status=ConnectorConnectionStatus.CONNECTED,
+                token_ref=token_ref,
+            )
+        log.info(
+            "oauth_orchestrator.pdc.connected",
+            connector=connector.value,
+            rep_id=str(rep_id),
+            app_slug=app_slug,
+        )
+        return OAuthCompletion(
+            connector=connector,
+            success=True,
+            token_ref=token_ref,
+            rep_id=rep_id,
+            tenant_id=tenant_id,
+        )
+
+    async def fail_via_pipedream_connect(
+        self,
+        *,
+        tenant_id: UUID,
+        rep_id: UUID,
+        connector: OnboardingConnector,
+        reason: str,
+    ) -> OAuthCompletion:
+        """Webhook-driven failure path (CONNECTION_ERROR /
+        ACCOUNT_REMOVED). Flips the connector to FAILED so onboarding
+        renders a retry prompt."""
+        with tenant_scope(tenant_id):
+            await self._state_repo.update_connector(
+                tenant_id=tenant_id,
+                rep_id=rep_id,
+                connector=connector,
+                status=ConnectorConnectionStatus.FAILED,
+                failure_reason=reason,
+            )
+        log.warning(
+            "oauth_orchestrator.pdc.failed",
+            connector=connector.value,
+            rep_id=str(rep_id),
+            reason=reason,
+        )
+        return OAuthCompletion(
+            connector=connector,
+            success=False,
+            failure_reason=reason,
+            rep_id=rep_id,
+            tenant_id=tenant_id,
+        )
